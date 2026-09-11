@@ -1,4 +1,5 @@
 import { sanitize } from "./sanitizer";
+import { buildPreviewDocument } from "./preview-document";
 
 export function HtmlPreviewWidget({ html }: { html: string }): string {
   const safe = sanitize(html);
@@ -8,6 +9,9 @@ export function HtmlPreviewWidget({ html }: { html: string }): string {
       display: flex;
       flex-direction: column;
       height: 100%;
+      width: 100%;
+      min-width: 0;
+      min-height: 0;
       font-family: var(--font-sans, sans-serif);
       color: var(--color-text, #e4e4e7);
       background: var(--color-surface, #18181b);
@@ -34,9 +38,12 @@ export function HtmlPreviewWidget({ html }: { html: string }): string {
           flex: 1;
           border: none;
           width: 100%;
+          min-width: 0;
+          min-height: 0;
           background: var(--color-surface, #18181b);
         "
-        srcdoc="${escapeAttr(safe)}"
+        title="Creator notes HTML preview"
+        srcdoc="${escapeAttr(buildPreviewDocument(safe))}"
       ></iframe>
     </div>
   `;

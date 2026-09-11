@@ -1,6 +1,8 @@
 import { sanitize } from "./sanitizer";
+import { buildPreviewDocument } from "./preview-document";
+import type { SpindleFrontendContext, CharacterDTO } from "lumiverse-spindle-types";
 
-export function setup(ctx) {
+export function setup(ctx: SpindleFrontendContext) {
   const tab = ctx.ui.registerDrawerTab({
     id: "html_preview",
     title: "HTML Preview",
@@ -12,47 +14,61 @@ export function setup(ctx) {
   });
 
   const root = tab.root;
-  root.style.cssText = "display:flex;flex-direction:column;height:100%;";
+  root.style.cssText = "display:flex;flex-direction:column;width:100%;min-width:0;min-height:0;height:100%;";
 
   const iframeContainer = document.createElement("div");
-  iframeContainer.style.cssText = "flex:1;overflow:hidden;";
+  iframeContainer.style.cssText = "flex:1;width:100%;min-width:0;min-height:0;overflow:hidden;";
   root.appendChild(iframeContainer);
 
-  function renderContent(html) {
+  function renderContent(html: string) {
     const safe = sanitize(html);
-    const doc = `<!DOCTYPE html><html style="color-scheme:dark light;overflow-x:auto !important;"><head><style>html,body{margin:0;padding:0;background:#18181b;color:#e4e4e7;white-space:pre-wrap;word-wrap:break-word;min-width:fit-content;overflow-x:auto !important;}</style></head><body>${safe}</body></html>`;
+    const doc = buildPreviewDocument(safe);
     iframeContainer.innerHTML = '';
     const iframe = document.createElement("iframe");
-    iframe.sandbox.add();
-    iframe.style.cssText = "width:100%;height:100%;border:none;background:transparent;";
+    iframe.setAttribute("sandbox", "");
+    iframe.title = "Creator notes HTML preview";
+    iframe.style.cssText = "display:block;width:100%;min-width:0;height:100%;border:none;background:transparent;";
     iframe.srcdoc = doc;
     iframeContainer.appendChild(iframe);
   }
 
-  function showError(msg) {
-    iframeContainer.innerHTML = `<p style="color:#f87171;padding:12px;">${msg}</p>`;
+  function showError(msg: string) {
+    showPlaceholder(msg);
+    (iframeContainer.firstChild as HTMLElement).style.color = "#f87171";
   }
 
-  function showPlaceholder(msg) {
-    iframeContainer.innerHTML = `<p style="opacity:0.5;padding:12px;">${msg}</p>`;
+  function showPlaceholder(msg: string) {
+    const message = document.createElement("p");
+    message.style.cssText = "opacity:0.5;padding:12px;";
+    message.textContent = msg;
+    iframeContainer.replaceChildren(message);
   }
+
+  let disposed = false;
+  let requestVersion = 0;
+  let observedCharacterId: string | null | undefined;
 
   async function loadCreatorNotes() {
+    if (disposed) return;
+    const version = ++requestVersion;
     const { characterId } = ctx.getActiveChat();
+    observedCharacterId = characterId;
     if (!characterId) {
       showPlaceholder("Open a character in the editor to see a live HTML preview of their creator notes.");
       return;
     }
 
     try {
-      const card = await ctx.characters.get(characterId);
-      const creatorNotes = card.creator_notes ?? "";
+      const card = await ctx.characters.get(characterId) as CharacterDTO | null;
+      if (disposed || version !== requestVersion || ctx.getActiveChat().characterId !== characterId) return;
+      const creatorNotes = card?.creator_notes ?? "";
       if (!creatorNotes) {
         showPlaceholder("Creator notes are empty.");
       } else {
         renderContent(creatorNotes);
       }
     } catch (err) {
+      if (disposed || version !== requestVersion || ctx.getActiveChat().characterId !== characterId) return;
       showError(`Failed to read creator notes: ${err}`);
     }
   }
@@ -63,7 +79,18 @@ export function setup(ctx) {
   const unsubChatSwitched = ctx.events.on("CHAT_SWITCHED", () => loadCreatorNotes());
   const unsubCharEdited = ctx.events.on("CHARACTER_EDITED", () => loadCreatorNotes());
 
+  // CHAT_SWITCHED can precede character hydration. Read the synchronous public
+  // snapshot; only fetch when selection changes, not on every timer tick.
+  const selectionTimer = setInterval(() => {
+    if (!disposed && ctx.getActiveChat().characterId !== observedCharacterId) {
+      void loadCreatorNotes();
+    }
+  }, 500);
+
   return () => {
+    disposed = true;
+    ++requestVersion;
+    clearInterval(selectionTimer);
     try { unsubActivate(); } catch (_) {}
     try { unsubChatSwitched(); } catch (_) {}
     try { unsubCharEdited(); } catch (_) {}
