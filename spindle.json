@@ -1,6 +1,6 @@
 {
   "identifier": "creator_notes_html_renderer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "name": "Creator Notes HTML Renderer",
   "author": "Ptolemaios",
   "description": "Renders HTML and CSS from a character's creator notes field as a live preview widget in the character editor.",
