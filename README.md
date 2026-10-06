@@ -19,15 +19,28 @@ The preview updates whenever the character data changes.
 
 | Permission | Why |
 |---|---|
-| `ui_panels` | Mount the float widget |
+| `ui_panels` | Mount the float widget (drawer tabs are free) |
 | `characters` | Read the active character's creator notes |
 
 ## Usage
 
 1. Open any character in the character editor
-2. The **HTML Preview** widget appears as a float panel on the right
+2. Open the **HTML Preview** drawer tab
 3. Write HTML + CSS in the creator notes field as normal
-4. The widget renders it live
+4. The preview renders it live
+
+### Floating Widget
+
+Click **Float preview** in the drawer tab toolbar to pop the preview out as a **floating widget** — the same live, sanitized preview in a draggable overlay window.
+
+- Drag it anywhere; it snaps to the nearest screen edge when dropped
+- Use the expand button in the widget header to toggle fullscreen
+- Resize it from the **W × H** strip at the bottom of the widget: type a width and height and hit **Apply** (or press Enter). Values are clamped to 220–1920 × 150–1200, the applied size is remembered across desktop pop-out returns, and reopening the widget restores it. This is explicit resizing — the float widget API has no native drag-corner resize
+- Close it with the × button (the drawer tab preview keeps running)
+- Hide or reset its position any time via right-click on the widget, or from the Extension UI control panel
+- On **Lumiverse Desktop**, the widget can be popped out into a native OS window; resizing via the strip also updates the native window bounds, and when the widget is returned to the page the preview content is rebuilt and refreshed automatically
+
+Both surfaces share one data pipeline: character switches and edits update the drawer tab and the floating widget together.
 
 ### What's Supported
 
@@ -66,9 +79,10 @@ The extension uses **three layers** of defense:
 
 ```
 src/
-  backend.ts     RPC handler to read character creator notes
-  frontend.ts    Float widget registration and HTML rendering
-  sanitizer.ts   Three-layer sanitizer (entity decode → tag/attr filter → CSS sanitize)
+  backend.ts       RPC handler to read character creator notes
+  frontend.ts      Drawer tab + floating widget wiring and shared live-state pipeline
+  preview-view.ts  Shared preview surface (sanitized iframe) used by both placements
+  sanitizer.ts     Three-layer sanitizer (entity decode → tag/attr filter → CSS sanitize)
 ```
 
 ## Development

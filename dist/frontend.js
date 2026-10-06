@@ -633,46 +633,117 @@ th, td, pre, code, kbd, samp {
 </style></head><body>${safeHtml}</body></html>`;
 }
 
+// src/preview-view.ts
+function createPreviewView() {
+  const element = document.createElement("div");
+  element.style.cssText = "flex:1;width:100%;min-width:0;min-height:0;overflow:hidden;";
+  function renderMessage(message, isError) {
+    const el = document.createElement("p");
+    el.style.cssText = "opacity:0.5;padding:12px;margin:0;";
+    if (isError) {
+      el.style.color = "#f87171";
+      el.style.opacity = "1";
+    }
+    el.textContent = message;
+    element.replaceChildren(el);
+  }
+  return {
+    element,
+    render(state) {
+      if (state.kind !== "html") {
+        renderMessage(state.message, state.kind === "error");
+        return;
+      }
+      const iframe = document.createElement("iframe");
+      iframe.setAttribute("sandbox", "");
+      iframe.title = "Creator notes HTML preview";
+      iframe.style.cssText = "display:block;width:100%;min-width:0;height:100%;border:none;background:transparent;";
+      iframe.srcdoc = buildPreviewDocument(sanitize(state.html));
+      element.replaceChildren(iframe);
+    }
+  };
+}
+
 // src/frontend.ts
+var EXTENSION_ID = "creator_notes_html_renderer";
+var DESKTOP_WIDGET_RETURNED_EVENT = "spindle:desktop-widget-returned";
+var FLOAT_MIN_WIDTH = 220;
+var FLOAT_MIN_HEIGHT = 150;
+var FLOAT_MAX_WIDTH = 1920;
+var FLOAT_MAX_HEIGHT = 1200;
+function clampInt(raw, fallback, min, max) {
+  const parsed = Number.parseInt(raw, 10);
+  if (Number.isNaN(parsed))
+    return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+var ICON_EXPAND = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
+var ICON_CLOSE = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+function iconButton(svg, label) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.innerHTML = svg;
+  button.style.cssText = "display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:none;border-radius:4px;background:transparent;color:inherit;opacity:0.6;cursor:pointer;";
+  return button;
+}
+function configureSizeInput(input, label, value, min, max) {
+  input.type = "number";
+  input.value = String(value);
+  input.min = String(min);
+  input.max = String(max);
+  input.title = `${label} in pixels (${min}–${max})`;
+  input.setAttribute("aria-label", label);
+  input.style.cssText = "width:60px;padding:2px 6px;font-size:12px;font-family:inherit;border:1px solid rgba(128,128,128,0.35);border-radius:4px;background:transparent;color:inherit;";
+}
 function setup(ctx) {
   const tab = ctx.ui.registerDrawerTab({
     id: "html_preview",
     title: "HTML Preview",
     shortName: "Preview",
     description: "Renders HTML and CSS from the creator notes field as a live preview.",
-    keywords: ["html", "css", "preview", "creator notes", "render"],
+    keywords: ["html", "css", "preview", "creator notes", "render", "float", "widget"],
     headerTitle: "HTML Preview",
     iconSvg: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>'
   });
   const root = tab.root;
   root.style.cssText = "display:flex;flex-direction:column;width:100%;min-width:0;min-height:0;height:100%;";
-  const iframeContainer = document.createElement("div");
-  iframeContainer.style.cssText = "flex:1;width:100%;min-width:0;min-height:0;overflow:hidden;";
-  root.appendChild(iframeContainer);
-  function renderContent(html) {
-    const safe = sanitize(html);
-    const doc = buildPreviewDocument(safe);
-    iframeContainer.innerHTML = "";
-    const iframe = document.createElement("iframe");
-    iframe.setAttribute("sandbox", "");
-    iframe.title = "Creator notes HTML preview";
-    iframe.style.cssText = "display:block;width:100%;min-width:0;height:100%;border:none;background:transparent;";
-    iframe.srcdoc = doc;
-    iframeContainer.appendChild(iframe);
-  }
-  function showError(msg) {
-    showPlaceholder(msg);
-    iframeContainer.firstChild.style.color = "#f87171";
-  }
-  function showPlaceholder(msg) {
-    const message = document.createElement("p");
-    message.style.cssText = "opacity:0.5;padding:12px;";
-    message.textContent = msg;
-    iframeContainer.replaceChildren(message);
-  }
+  const toolbar = document.createElement("div");
+  toolbar.style.cssText = "display:flex;align-items:center;gap:8px;padding:6px 8px;flex:0 0 auto;border-bottom:1px solid rgba(128,128,128,0.25);";
+  const toolbarLabel = document.createElement("span");
+  toolbarLabel.textContent = "Creator Notes";
+  toolbarLabel.style.cssText = "font-size:12px;opacity:0.6;";
+  toolbar.appendChild(toolbarLabel);
+  const toolbarSpacer = document.createElement("span");
+  toolbarSpacer.style.flex = "1";
+  toolbar.appendChild(toolbarSpacer);
+  const floatButton = document.createElement("button");
+  floatButton.type = "button";
+  floatButton.textContent = "Float preview";
+  floatButton.title = "Show this preview as a floating widget";
+  floatButton.style.cssText = "padding:3px 10px;font-size:12px;font-family:inherit;border:1px solid rgba(128,128,128,0.35);border-radius:6px;background:transparent;color:inherit;opacity:0.7;cursor:pointer;";
+  floatButton.addEventListener("click", () => openFloatWidget());
+  toolbar.appendChild(floatButton);
+  root.appendChild(toolbar);
+  const drawerView = createPreviewView();
+  root.appendChild(drawerView.element);
   let disposed = false;
   let requestVersion = 0;
   let observedCharacterId;
+  let latestState = null;
+  const listeners = new Set;
+  function subscribe(listener) {
+    listeners.add(listener);
+    if (latestState)
+      listener(latestState);
+    return () => listeners.delete(listener);
+  }
+  function broadcast(state) {
+    latestState = state;
+    for (const listener of listeners)
+      listener(state);
+  }
   async function loadCreatorNotes() {
     if (disposed)
       return;
@@ -680,7 +751,10 @@ function setup(ctx) {
     const { characterId } = ctx.getActiveChat();
     observedCharacterId = characterId;
     if (!characterId) {
-      showPlaceholder("Open a character in the editor to see a live HTML preview of their creator notes.");
+      broadcast({
+        kind: "placeholder",
+        message: "Open a character in the editor to see a live HTML preview of their creator notes."
+      });
       return;
     }
     try {
@@ -689,16 +763,17 @@ function setup(ctx) {
         return;
       const creatorNotes = card?.creator_notes ?? "";
       if (!creatorNotes) {
-        showPlaceholder("Creator notes are empty.");
+        broadcast({ kind: "placeholder", message: "Creator notes are empty." });
       } else {
-        renderContent(creatorNotes);
+        broadcast({ kind: "html", html: creatorNotes });
       }
     } catch (err) {
       if (disposed || version !== requestVersion || ctx.getActiveChat().characterId !== characterId)
         return;
-      showError(`Failed to read creator notes: ${err}`);
+      broadcast({ kind: "error", message: `Failed to read creator notes: ${err}` });
     }
   }
+  const unsubDrawerView = subscribe(drawerView.render);
   loadCreatorNotes();
   const unsubActivate = tab.onActivate(() => loadCreatorNotes());
   const unsubChatSwitched = ctx.events.on("CHAT_SWITCHED", () => loadCreatorNotes());
@@ -708,10 +783,149 @@ function setup(ctx) {
       loadCreatorNotes();
     }
   }, 500);
+  let floatHandle = null;
+  let floatView = null;
+  let unsubFloatView = null;
+  let unsubDesktopReturned = null;
+  let floatSize = { width: 420, height: 560 };
+  function mountFloatContent(handle) {
+    const wroot = handle.root;
+    wroot.style.cssText = "display:flex;flex-direction:column;width:100%;height:100%;min-width:0;min-height:0;font-family:inherit;color:inherit;";
+    wroot.replaceChildren();
+    const header = document.createElement("div");
+    header.style.cssText = "display:flex;align-items:center;gap:6px;padding:6px 8px;flex:0 0 auto;border-bottom:1px solid rgba(128,128,128,0.25);";
+    const title = document.createElement("span");
+    title.textContent = "HTML Preview";
+    title.style.cssText = "font-size:12px;font-weight:600;opacity:0.7;";
+    header.appendChild(title);
+    const spacer = document.createElement("span");
+    spacer.style.flex = "1";
+    header.appendChild(spacer);
+    const fullscreenButton = iconButton(ICON_EXPAND, "Toggle fullscreen");
+    fullscreenButton.addEventListener("click", () => {
+      try {
+        handle.setFullscreen(!handle.isFullscreen());
+      } catch (_) {}
+    });
+    header.appendChild(fullscreenButton);
+    const closeButton = iconButton(ICON_CLOSE, "Close preview widget");
+    closeButton.addEventListener("click", () => closeFloatWidget());
+    header.appendChild(closeButton);
+    wroot.appendChild(header);
+    floatView = createPreviewView();
+    wroot.appendChild(floatView.element);
+    if (latestState)
+      floatView.render(latestState);
+    const sizeStrip = document.createElement("div");
+    sizeStrip.style.cssText = "display:flex;align-items:center;gap:6px;padding:6px 8px;flex:0 0 auto;border-top:1px solid rgba(128,128,128,0.25);font-size:12px;";
+    const wLabel = document.createElement("span");
+    wLabel.textContent = "W";
+    wLabel.style.cssText = "opacity:0.5;";
+    sizeStrip.appendChild(wLabel);
+    const widthInput = document.createElement("input");
+    configureSizeInput(widthInput, "Widget width", floatSize.width, FLOAT_MIN_WIDTH, FLOAT_MAX_WIDTH);
+    sizeStrip.appendChild(widthInput);
+    const separator = document.createElement("span");
+    separator.textContent = "×";
+    separator.style.cssText = "opacity:0.5;";
+    sizeStrip.appendChild(separator);
+    const hLabel = document.createElement("span");
+    hLabel.textContent = "H";
+    hLabel.style.cssText = "opacity:0.5;";
+    sizeStrip.appendChild(hLabel);
+    const heightInput = document.createElement("input");
+    configureSizeInput(heightInput, "Widget height", floatSize.height, FLOAT_MIN_HEIGHT, FLOAT_MAX_HEIGHT);
+    sizeStrip.appendChild(heightInput);
+    const applyButton = document.createElement("button");
+    applyButton.type = "button";
+    applyButton.textContent = "Apply";
+    applyButton.title = "Resize the widget";
+    applyButton.style.cssText = "padding:2px 10px;font-size:12px;font-family:inherit;border:1px solid rgba(128,128,128,0.35);border-radius:4px;background:transparent;color:inherit;opacity:0.7;cursor:pointer;";
+    sizeStrip.appendChild(applyButton);
+    function applySize() {
+      const width = clampInt(widthInput.value, floatSize.width, FLOAT_MIN_WIDTH, FLOAT_MAX_WIDTH);
+      const height = clampInt(heightInput.value, floatSize.height, FLOAT_MIN_HEIGHT, FLOAT_MAX_HEIGHT);
+      widthInput.value = String(width);
+      heightInput.value = String(height);
+      floatSize = { width, height };
+      try {
+        handle.setSize(width, height);
+      } catch (_) {}
+    }
+    applyButton.addEventListener("click", applySize);
+    for (const input of [widthInput, heightInput]) {
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter")
+          applySize();
+      });
+    }
+    wroot.appendChild(sizeStrip);
+  }
+  function listenForDesktopReturn(handle) {
+    if (typeof window === "undefined" || typeof window.addEventListener !== "function")
+      return null;
+    const handler = (event) => {
+      const detail = event.detail;
+      if (!detail || detail.widgetId !== handle.widgetId || detail.extensionId !== EXTENSION_ID)
+        return;
+      if (floatHandle !== handle)
+        return;
+      mountFloatContent(handle);
+      loadCreatorNotes();
+    };
+    window.addEventListener(DESKTOP_WIDGET_RETURNED_EVENT, handler);
+    return () => window.removeEventListener(DESKTOP_WIDGET_RETURNED_EVENT, handler);
+  }
+  function closeFloatWidget() {
+    unsubFloatView?.();
+    unsubFloatView = null;
+    unsubDesktopReturned?.();
+    unsubDesktopReturned = null;
+    floatView = null;
+    if (floatHandle) {
+      try {
+        floatHandle.destroy();
+      } catch (_) {}
+      floatHandle = null;
+    }
+  }
+  function openFloatWidget() {
+    if (disposed)
+      return;
+    if (floatHandle) {
+      try {
+        floatHandle.setVisible(true);
+        return;
+      } catch (_) {
+        floatHandle = null;
+        floatView = null;
+      }
+    }
+    let handle;
+    try {
+      handle = ctx.ui.createFloatWidget({
+        width: floatSize.width,
+        height: floatSize.height,
+        snapToEdge: true,
+        tooltip: "Creator notes HTML preview"
+      });
+    } catch (err) {
+      console.warn(`[${EXTENSION_ID}] failed to create float widget:`, err);
+      return;
+    }
+    floatHandle = handle;
+    unsubFloatView = subscribe((state) => floatView?.render(state));
+    mountFloatContent(handle);
+    unsubDesktopReturned = listenForDesktopReturn(handle);
+  }
   return () => {
     disposed = true;
     ++requestVersion;
     clearInterval(selectionTimer);
+    closeFloatWidget();
+    try {
+      unsubDrawerView();
+    } catch (_) {}
     try {
       unsubActivate();
     } catch (_) {}
