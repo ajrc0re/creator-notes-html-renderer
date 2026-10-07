@@ -60,6 +60,7 @@ function installLocalStorageStub() {
   return {
     seed(key: string, value: string) { data.set(key, value); },
     drop(key: string) { data.delete(key); },
+    get(key: string) { return data.has(key) ? data.get(key)! : null; },
     restore: () => {
       if (saved === undefined) delete (globalThis as any).localStorage;
       else (globalThis as any).localStorage = saved;
@@ -87,10 +88,12 @@ function installWindowStub(search?: string) {
 function installIntervalStub() {
   const saved = [globalThis.setInterval, globalThis.clearInterval] as const;
   let cleared = false;
-  globalThis.setInterval = (() => 1) as any;
+  let tick = () => {};
+  globalThis.setInterval = ((callback: () => void) => { tick = callback; return 1; }) as any;
   globalThis.clearInterval = (() => { cleared = true; }) as any;
   return {
     get cleared() { return cleared; },
+    tick: () => tick(),
     restore: () => { [globalThis.setInterval, globalThis.clearInterval] = saved as any; },
   };
 }
@@ -118,6 +121,7 @@ function makeFloatWidgetHandle() {
 
 test("delayed selection recovers, stale replies are ignored, and cleanup stops polling", async () => {
   const dom = installDomStub();
+  const storage = installLocalStorageStub();
   const saved = [globalThis.setInterval, globalThis.clearInterval] as const;
   let tick = () => {};
   let cleared = false;
@@ -148,6 +152,8 @@ test("delayed selection recovers, stale replies are ignored, and cleanup stops p
     await Promise.resolve();
     expect(dom.frames).toHaveLength(1);
     expect(dom.frames[0].srcdoc).toContain("new character");
+    // The main window mirrors the active character for pop-out windows.
+    expect(storage.get("creator_notes_html_renderer:activeCharacterId")).toBe("b");
     resolveA({ creator_notes: "old character" });
     await Promise.resolve();
     expect(dom.frames).toHaveLength(1);
@@ -160,6 +166,7 @@ test("delayed selection recovers, stale replies are ignored, and cleanup stops p
     expect(reads).toEqual(["a", "b"]);
   } finally {
     [globalThis.setInterval, globalThis.clearInterval] = saved as any;
+    storage.restore();
     dom.restore();
   }
 });
@@ -167,6 +174,7 @@ test("delayed selection recovers, stale replies are ignored, and cleanup stops p
 test("float widget renders the preview, survives a desktop pop-out return, and cleans up", async () => {
   const dom = installDomStub();
   const win = installWindowStub();
+  const storage = installLocalStorageStub();
   const interval = installIntervalStub();
   let characterId: string | null = "a";
   const events: Record<string, () => void> = {};
@@ -291,6 +299,7 @@ test("float widget renders the preview, survives a desktop pop-out return, and c
   } finally {
     cleanup?.();
     interval.restore();
+    storage.restore();
     win.restore();
     dom.restore();
   }
@@ -299,6 +308,7 @@ test("float widget renders the preview, survives a desktop pop-out return, and c
 test("float widget creation failure (e.g. revoked ui_panels) is tolerated", async () => {
   const dom = installDomStub();
   const interval = installIntervalStub();
+  const storage = installLocalStorageStub();
   let characterId: string | null = "a";
   let created = 0;
   let cleanup: (() => void) | undefined;
@@ -321,6 +331,7 @@ test("float widget creation failure (e.g. revoked ui_panels) is tolerated", asyn
   } finally {
     cleanup?.();
     interval.restore();
+    storage.restore();
     dom.restore();
   }
 });
@@ -358,26 +369,38 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
         };
       },
     },
-    getActiveChat: () => ({ characterId }),
-    characters: { get: () => Promise.resolve({ creator_notes: "<b>popout notes</b>" }) },
+    // A real pop-out window never learns the active chat (ChatView never
+    // renders there), so getActiveChat returns null in widget mode.
+    getActiveChat: () => ({ characterId: isWidgetPhase ? null : characterId }),
+    characters: { get(id: string) {
+      reads.push(id);
+      return Promise.resolve({ creator_notes: `<b>notes for ${id}</b>` });
+    } },
     events: { on: () => () => {} },
   });
 
+  let isWidgetPhase = false;
+  const reads: string[] = [];
+
   try {
     // Phase 1 — main window: no widget params; drawer tab teaches us the
-    // runtime UUID via the host stamp and persists it for pop-out windows.
+    // runtime UUID via the host stamp, and the active character is mirrored
+    // for pop-out windows.
     let win = installWindowStub();
     let cleanup = setup(makeCtx() as any);
     await flush();
     expect(created).toBe(0);
     expect(registerDrawerTabCalls).toBe(1);
-    expect((globalThis as any).localStorage.getItem("creator_notes_html_renderer:runtimeExtensionId"))
+    expect(storage.get("creator_notes_html_renderer:runtimeExtensionId"))
       .toBe("runtime-uuid-live");
+    expect(storage.get("creator_notes_html_renderer:activeCharacterId")).toBe("a");
+    const mainPhaseFrames = dom.frames.length;
     cleanup();
     win.restore();
 
     // Phase 2 — a pop-out URL for a DIFFERENT extension must not trigger
     // widget mode (the known UUID does not match).
+    isWidgetPhase = true;
     win = installWindowStub("?desktopWidgetExtension=someone_else&desktopWidgetWidth=500&desktopWidgetHeight=400");
     cleanup = setup(makeCtx() as any);
     await flush();
@@ -386,12 +409,13 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     cleanup();
     win.restore();
 
-    // Phase 3 — our own pop-out URL: widget created immediately, no drawer tab.
+    // Phase 3 — our own pop-out URL: widget created immediately, no drawer
+    // tab, and the active character resolves through the mirror.
     win = installWindowStub(
       "?desktopWidgetExtension=runtime-uuid-live&desktopWidgetIndex=0" +
       "&desktopWidgetTitle=Creator%20Notes%20HTML%20Renderer&desktopWidgetWidth=500&desktopWidgetHeight=400",
     );
-    const drawerPhaseFrames = dom.frames.length;
+    const drawerPhaseFrames = mainPhaseFrames;
     const drawerPhaseButtons = dom.buttons().length;
     const drawerPhaseInputs = dom.nodes.filter((n) => n.tag === "input").length;
     cleanup = setup(makeCtx() as any);
@@ -400,7 +424,16 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     expect(registerDrawerTabCalls).toBe(2); // unchanged from the foreign phase
     await flush();
     expect(dom.frames).toHaveLength(drawerPhaseFrames + 1);
-    expect(dom.frames[dom.frames.length - 1].srcdoc).toContain("popout notes");
+    expect(dom.frames[dom.frames.length - 1].srcdoc).toContain("notes for a");
+    expect(reads).toEqual(["a", "a"]); // phase 1 main window + phase 3 pop-out
+
+    // A character switch in the main window updates the mirror; the pop-out
+    // poll picks it up and re-renders.
+    storage.seed("creator_notes_html_renderer:activeCharacterId", "b");
+    interval.tick();
+    await flush();
+    expect(reads).toEqual(["a", "a", "b"]);
+    expect(dom.frames[dom.frames.length - 1].srcdoc).toContain("notes for b");
 
     // No in-widget chrome in a pop-out: the native window owns title/close.
     const widgetButtons = dom.buttons().slice(drawerPhaseButtons);
@@ -429,6 +462,8 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     cleanup = setup(makeCtx() as any);
     expect(created).toBe(2);
     expect(createdOptions[1]).toMatchObject({ width: 300, height: 250 });
+    await flush();
+    expect(dom.frames[dom.frames.length - 1].srcdoc).toContain("notes for b");
     cleanup();
     win.restore();
   } finally {

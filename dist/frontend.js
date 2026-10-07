@@ -694,6 +694,25 @@ function rememberRuntimeExtensionId(root) {
   }
   return id;
 }
+var ACTIVE_CHARACTER_KEY = `${EXTENSION_ID}:activeCharacterId`;
+function readMirroredCharacterId() {
+  try {
+    const id = typeof localStorage === "undefined" ? null : localStorage.getItem(ACTIVE_CHARACTER_KEY);
+    return typeof id === "string" && id.length > 0 ? id : null;
+  } catch (_) {
+    return null;
+  }
+}
+function writeMirroredCharacterId(id) {
+  try {
+    if (typeof localStorage === "undefined")
+      return;
+    if (id)
+      localStorage.setItem(ACTIVE_CHARACTER_KEY, id);
+    else
+      localStorage.removeItem(ACTIVE_CHARACTER_KEY);
+  } catch (_) {}
+}
 var DESKTOP_WIDGET_RETURNED_EVENT = "spindle:desktop-widget-returned";
 function readDesktopWidgetTarget() {
   if (typeof window === "undefined" || typeof window.location === "undefined")
@@ -713,6 +732,15 @@ function readDesktopWidgetTarget() {
     return { width, height };
   } catch (_) {
     return null;
+  }
+}
+function inAnyDesktopWidgetWindow() {
+  if (typeof window === "undefined" || typeof window.location === "undefined")
+    return false;
+  try {
+    return new URLSearchParams(window.location.search).has("desktopWidgetExtension");
+  } catch (_) {
+    return false;
   }
 }
 var BROWSER_SIZE_CLAMPS = {
@@ -757,6 +785,7 @@ function setup(ctx) {
   const desktopWidget = readDesktopWidgetTarget();
   const isWidgetWindow = desktopWidget !== null;
   const sizeClamps = isWidgetWindow ? DESKTOP_SIZE_CLAMPS : BROWSER_SIZE_CLAMPS;
+  const canMirrorActiveCharacter = !inAnyDesktopWidgetWindow();
   let disposed = false;
   let requestVersion = 0;
   let observedCharacterId;
@@ -773,11 +802,24 @@ function setup(ctx) {
     for (const listener of listeners)
       listener(state);
   }
+  function resolveActiveCharacterId() {
+    const characterId = ctx.getActiveChat().characterId ?? null;
+    if (characterId) {
+      if (canMirrorActiveCharacter)
+        writeMirroredCharacterId(characterId);
+      return characterId;
+    }
+    if (isWidgetWindow)
+      return readMirroredCharacterId();
+    if (canMirrorActiveCharacter)
+      writeMirroredCharacterId(null);
+    return null;
+  }
   async function loadCreatorNotes() {
     if (disposed)
       return;
     const version = ++requestVersion;
-    const { characterId } = ctx.getActiveChat();
+    const characterId = resolveActiveCharacterId();
     observedCharacterId = characterId;
     if (!characterId) {
       broadcast({
@@ -788,7 +830,7 @@ function setup(ctx) {
     }
     try {
       const card = await ctx.characters.get(characterId);
-      if (disposed || version !== requestVersion || ctx.getActiveChat().characterId !== characterId)
+      if (disposed || version !== requestVersion || resolveActiveCharacterId() !== characterId)
         return;
       const creatorNotes = card?.creator_notes ?? "";
       if (!creatorNotes) {
@@ -797,7 +839,7 @@ function setup(ctx) {
         broadcast({ kind: "html", html: creatorNotes });
       }
     } catch (err) {
-      if (disposed || version !== requestVersion || ctx.getActiveChat().characterId !== characterId)
+      if (disposed || version !== requestVersion || resolveActiveCharacterId() !== characterId)
         return;
       broadcast({ kind: "error", message: `Failed to read creator notes: ${err}` });
     }
@@ -851,7 +893,7 @@ function setup(ctx) {
   const unsubChatSwitched = ctx.events.on("CHAT_SWITCHED", () => loadCreatorNotes());
   const unsubCharEdited = ctx.events.on("CHARACTER_EDITED", () => loadCreatorNotes());
   const selectionTimer = setInterval(() => {
-    if (!disposed && ctx.getActiveChat().characterId !== observedCharacterId) {
+    if (!disposed && resolveActiveCharacterId() !== observedCharacterId) {
       loadCreatorNotes();
     }
   }, 500);

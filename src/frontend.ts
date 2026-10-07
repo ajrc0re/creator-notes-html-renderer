@@ -44,6 +44,29 @@ function rememberRuntimeExtensionId(root: HTMLElement | null | undefined): strin
   return id;
 }
 
+/** A desktop pop-out window never renders ChatView, so its store never learns
+ *  the active chat — ctx.getActiveChat() is permanently empty there. The main
+ *  window mirrors the active character id here (same-origin localStorage is
+ *  shared with pop-out WebViews); the pop-out's poll picks up switches. */
+const ACTIVE_CHARACTER_KEY = `${EXTENSION_ID}:activeCharacterId`;
+
+function readMirroredCharacterId(): string | null {
+  try {
+    const id = typeof localStorage === "undefined" ? null : localStorage.getItem(ACTIVE_CHARACTER_KEY);
+    return typeof id === "string" && id.length > 0 ? id : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeMirroredCharacterId(id: string | null) {
+  try {
+    if (typeof localStorage === "undefined") return;
+    if (id) localStorage.setItem(ACTIVE_CHARACTER_KEY, id);
+    else localStorage.removeItem(ACTIVE_CHARACTER_KEY);
+  } catch (_) {}
+}
+
 /** Private Lumiverse Desktop event fired when a native pop-out widget is
  *  returned to the page (remounting its root). Not part of the published
  *  Spindle API; everything must keep working when it never fires. */
@@ -81,6 +104,19 @@ function readDesktopWidgetTarget(): DesktopWidgetTarget | null {
     return { width, height };
   } catch (_) {
     return null;
+  }
+}
+
+/** True in ANY extension's desktop pop-out window (ours or foreign). Only the
+ *  real main window — which actually renders ChatView and knows the active
+ *  chat — may write the mirror; pop-out windows are read-only consumers, or a
+ *  foreign pop-out's empty store would wipe it. */
+function inAnyDesktopWidgetWindow(): boolean {
+  if (typeof window === "undefined" || typeof window.location === "undefined") return false;
+  try {
+    return new URLSearchParams(window.location.search).has("desktopWidgetExtension");
+  } catch (_) {
+    return false;
   }
 }
 
@@ -149,6 +185,7 @@ export function setup(ctx: SpindleFrontendContext) {
   const desktopWidget = readDesktopWidgetTarget();
   const isWidgetWindow = desktopWidget !== null;
   const sizeClamps = isWidgetWindow ? DESKTOP_SIZE_CLAMPS : BROWSER_SIZE_CLAMPS;
+  const canMirrorActiveCharacter = !inAnyDesktopWidgetWindow();
 
   let disposed = false;
   let requestVersion = 0;
@@ -167,10 +204,21 @@ export function setup(ctx: SpindleFrontendContext) {
     for (const listener of listeners) listener(state);
   }
 
+  function resolveActiveCharacterId(): string | null {
+    const characterId = ctx.getActiveChat().characterId ?? null;
+    if (characterId) {
+      if (canMirrorActiveCharacter) writeMirroredCharacterId(characterId);
+      return characterId;
+    }
+    if (isWidgetWindow) return readMirroredCharacterId();
+    if (canMirrorActiveCharacter) writeMirroredCharacterId(null);
+    return null;
+  }
+
   async function loadCreatorNotes() {
     if (disposed) return;
     const version = ++requestVersion;
-    const { characterId } = ctx.getActiveChat();
+    const characterId = resolveActiveCharacterId();
     observedCharacterId = characterId;
     if (!characterId) {
       broadcast({
@@ -182,7 +230,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
     try {
       const card = await ctx.characters.get(characterId) as CharacterDTO | null;
-      if (disposed || version !== requestVersion || ctx.getActiveChat().characterId !== characterId) return;
+      if (disposed || version !== requestVersion || resolveActiveCharacterId() !== characterId) return;
       const creatorNotes = card?.creator_notes ?? "";
       if (!creatorNotes) {
         broadcast({ kind: "placeholder", message: "Creator notes are empty." });
@@ -190,7 +238,7 @@ export function setup(ctx: SpindleFrontendContext) {
         broadcast({ kind: "html", html: creatorNotes });
       }
     } catch (err) {
-      if (disposed || version !== requestVersion || ctx.getActiveChat().characterId !== characterId) return;
+      if (disposed || version !== requestVersion || resolveActiveCharacterId() !== characterId) return;
       broadcast({ kind: "error", message: `Failed to read creator notes: ${err}` });
     }
   }
@@ -261,10 +309,11 @@ export function setup(ctx: SpindleFrontendContext) {
   const unsubChatSwitched = ctx.events.on("CHAT_SWITCHED", () => loadCreatorNotes());
   const unsubCharEdited = ctx.events.on("CHARACTER_EDITED", () => loadCreatorNotes());
 
-  // CHAT_SWITCHED can precede character hydration. Read the synchronous public
+  // CHAT_SWITCHED can precede character hydration, and a pop-out learns the
+  // active character only through the localStorage mirror. Read the resolved
   // snapshot; only fetch when selection changes, not on every timer tick.
   const selectionTimer = setInterval(() => {
-    if (!disposed && ctx.getActiveChat().characterId !== observedCharacterId) {
+    if (!disposed && resolveActiveCharacterId() !== observedCharacterId) {
       void loadCreatorNotes();
     }
   }, 500);
