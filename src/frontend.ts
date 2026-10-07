@@ -13,17 +13,52 @@ const EXTENSION_ID = "creator_notes_html_renderer";
  *  Spindle API; everything must keep working when it never fires. */
 const DESKTOP_WIDGET_RETURNED_EVENT = "spindle:desktop-widget-returned";
 
+/** Lumiverse Desktop opens a floating-widget pop-out as a *second frontend
+ *  instance* in a native WebView whose URL carries these params. The
+ *  extension is loaded in that window too and is expected to create its
+ *  widget there; until it does, the window shows "Loading …" forever. */
+interface DesktopWidgetTarget {
+  width: number;
+  height: number;
+}
+
 interface DesktopWidgetReturnedDetail {
   widgetId?: unknown;
   extensionId?: unknown;
 }
 
-/** Size clamps for the float widget; the host clamps oversized widgets to the
- *  viewport on mobile anyway, these just keep the inputs sane. */
-const FLOAT_MIN_WIDTH = 220;
-const FLOAT_MIN_HEIGHT = 150;
-const FLOAT_MAX_WIDTH = 1920;
-const FLOAT_MAX_HEIGHT = 1200;
+function readDesktopWidgetTarget(): DesktopWidgetTarget | null {
+  if (typeof window === "undefined" || typeof window.location === "undefined") return null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("desktopWidgetExtension") !== EXTENSION_ID) return null;
+    const width = Number(params.get("desktopWidgetWidth"));
+    const height = Number(params.get("desktopWidgetHeight"));
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+    return { width, height };
+  } catch (_) {
+    return null;
+  }
+}
+
+interface SizeClamps {
+  minWidth: number;
+  minHeight: number;
+  maxWidth: number;
+  maxHeight: number;
+}
+
+/** Browser-mode clamps; the host clamps oversized widgets to the viewport on
+ *  mobile anyway, these just keep the inputs sane. */
+const BROWSER_SIZE_CLAMPS: SizeClamps = {
+  minWidth: 220, minHeight: 150, maxWidth: 1920, maxHeight: 1200,
+};
+
+/** Desktop pop-out windows resize via setSize and are clamped by Lumiverse
+ *  Desktop to these bounds (see DesktopFloatingWidgetHost). */
+const DESKTOP_SIZE_CLAMPS: SizeClamps = {
+  minWidth: 160, minHeight: 100, maxWidth: 1200, maxHeight: 900,
+};
 
 function clampInt(raw: string, fallback: number, min: number, max: number): number {
   const parsed = Number.parseInt(raw, 10);
@@ -65,48 +100,13 @@ function configureSizeInput(
 }
 
 export function setup(ctx: SpindleFrontendContext) {
-  const tab = ctx.ui.registerDrawerTab({
-    id: "html_preview",
-    title: "HTML Preview",
-    shortName: "Preview",
-    description: "Renders HTML and CSS from the creator notes field as a live preview.",
-    keywords: ["html", "css", "preview", "creator notes", "render", "float", "widget"],
-    headerTitle: "HTML Preview",
-    iconSvg: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>'
-  });
+  // A desktop pop-out loads the whole frontend — including this extension —
+  // in widget mode. There is no drawer and no button to click there, so the
+  // widget must be created immediately for the window to find it.
+  const desktopWidget = readDesktopWidgetTarget();
+  const isWidgetWindow = desktopWidget !== null;
+  const sizeClamps = isWidgetWindow ? DESKTOP_SIZE_CLAMPS : BROWSER_SIZE_CLAMPS;
 
-  const root = tab.root;
-  root.style.cssText = "display:flex;flex-direction:column;width:100%;min-width:0;min-height:0;height:100%;";
-
-  // ── Drawer tab: toolbar + preview ──
-  const toolbar = document.createElement("div");
-  toolbar.style.cssText =
-    "display:flex;align-items:center;gap:8px;padding:6px 8px;flex:0 0 auto;border-bottom:1px solid rgba(128,128,128,0.25);";
-
-  const toolbarLabel = document.createElement("span");
-  toolbarLabel.textContent = "Creator Notes";
-  toolbarLabel.style.cssText = "font-size:12px;opacity:0.6;";
-  toolbar.appendChild(toolbarLabel);
-
-  const toolbarSpacer = document.createElement("span");
-  toolbarSpacer.style.flex = "1";
-  toolbar.appendChild(toolbarSpacer);
-
-  const floatButton = document.createElement("button");
-  floatButton.type = "button";
-  floatButton.textContent = "Float preview";
-  floatButton.title = "Show this preview as a floating widget";
-  floatButton.style.cssText =
-    "padding:3px 10px;font-size:12px;font-family:inherit;border:1px solid rgba(128,128,128,0.35);border-radius:6px;background:transparent;color:inherit;opacity:0.7;cursor:pointer;";
-  floatButton.addEventListener("click", () => openFloatWidget());
-  toolbar.appendChild(floatButton);
-
-  root.appendChild(toolbar);
-
-  const drawerView = createPreviewView();
-  root.appendChild(drawerView.element);
-
-  // ── Shared preview state: one loader, many surfaces ──
   let disposed = false;
   let requestVersion = 0;
   let observedCharacterId: string | null | undefined;
@@ -152,11 +152,62 @@ export function setup(ctx: SpindleFrontendContext) {
     }
   }
 
-  const unsubDrawerView = subscribe(drawerView.render);
+  // ── Drawer tab (main window only; a pop-out window renders no drawer) ──
+  const teardownSteps: (() => void)[] = [];
+  let drawerView: ReturnType<typeof createPreviewView> | null = null;
+  let unsubDrawerView: (() => void) | null = null;
+  let unsubActivate: (() => void) | null = null;
+
+  if (!isWidgetWindow) {
+    const tab = ctx.ui.registerDrawerTab({
+      id: "html_preview",
+      title: "HTML Preview",
+      shortName: "Preview",
+      description: "Renders HTML and CSS from the creator notes field as a live preview.",
+      keywords: ["html", "css", "preview", "creator notes", "render", "float", "widget"],
+      headerTitle: "HTML Preview",
+      iconSvg: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>'
+    });
+
+    const root = tab.root;
+    root.style.cssText = "display:flex;flex-direction:column;width:100%;min-width:0;min-height:0;height:100%;";
+
+    const toolbar = document.createElement("div");
+    toolbar.style.cssText =
+      "display:flex;align-items:center;gap:8px;padding:6px 8px;flex:0 0 auto;border-bottom:1px solid rgba(128,128,128,0.25);";
+
+    const toolbarLabel = document.createElement("span");
+    toolbarLabel.textContent = "Creator Notes";
+    toolbarLabel.style.cssText = "font-size:12px;opacity:0.6;";
+    toolbar.appendChild(toolbarLabel);
+
+    const toolbarSpacer = document.createElement("span");
+    toolbarSpacer.style.flex = "1";
+    toolbar.appendChild(toolbarSpacer);
+
+    const floatButton = document.createElement("button");
+    floatButton.type = "button";
+    floatButton.textContent = "Float preview";
+    floatButton.title = "Show this preview as a floating widget";
+    floatButton.style.cssText =
+      "padding:3px 10px;font-size:12px;font-family:inherit;border:1px solid rgba(128,128,128,0.35);border-radius:6px;background:transparent;color:inherit;opacity:0.7;cursor:pointer;";
+    floatButton.addEventListener("click", () => openFloatWidget());
+    toolbar.appendChild(floatButton);
+
+    root.appendChild(toolbar);
+
+    drawerView = createPreviewView();
+    root.appendChild(drawerView.element);
+    unsubDrawerView = subscribe(drawerView.render);
+    unsubActivate = tab.onActivate(() => loadCreatorNotes());
+
+    teardownSteps.push(() => {
+      try { tab.destroy(); } catch (_) {}
+    });
+  }
 
   loadCreatorNotes();
 
-  const unsubActivate = tab.onActivate(() => loadCreatorNotes());
   const unsubChatSwitched = ctx.events.on("CHAT_SWITCHED", () => loadCreatorNotes());
   const unsubCharEdited = ctx.events.on("CHARACTER_EDITED", () => loadCreatorNotes());
 
@@ -168,12 +219,12 @@ export function setup(ctx: SpindleFrontendContext) {
     }
   }, 500);
 
-  // ── Floating widget (Lumiverse Desktop float widgets API) ──
+  // ── Floating widget ──
   let floatHandle: SpindleFloatWidgetHandle | null = null;
   let floatView: ReturnType<typeof createPreviewView> | null = null;
   let unsubFloatView: (() => void) | null = null;
   let unsubDesktopReturned: (() => void) | null = null;
-  let floatSize = { width: 420, height: 560 };
+  let floatSize = desktopWidget ?? { width: 420, height: 560 };
 
   function mountFloatContent(handle: SpindleFloatWidgetHandle) {
     const wroot = handle.root;
@@ -181,41 +232,47 @@ export function setup(ctx: SpindleFrontendContext) {
       "display:flex;flex-direction:column;width:100%;height:100%;min-width:0;min-height:0;font-family:inherit;color:inherit;";
     wroot.replaceChildren();
 
-    const header = document.createElement("div");
-    header.style.cssText =
-      "display:flex;align-items:center;gap:6px;padding:6px 8px;flex:0 0 auto;border-bottom:1px solid rgba(128,128,128,0.25);";
+    // In a desktop pop-out the native window provides its own chrome (title
+    // bar with a return button, edge resize handles), and destroying the
+    // widget from inside would strand the window on "Loading" — so no header
+    // buttons there.
+    if (!isWidgetWindow) {
+      const header = document.createElement("div");
+      header.style.cssText =
+        "display:flex;align-items:center;gap:6px;padding:6px 8px;flex:0 0 auto;border-bottom:1px solid rgba(128,128,128,0.25);";
 
-    const title = document.createElement("span");
-    title.textContent = "HTML Preview";
-    title.style.cssText = "font-size:12px;font-weight:600;opacity:0.7;";
-    header.appendChild(title);
+      const title = document.createElement("span");
+      title.textContent = "HTML Preview";
+      title.style.cssText = "font-size:12px;font-weight:600;opacity:0.7;";
+      header.appendChild(title);
 
-    const spacer = document.createElement("span");
-    spacer.style.flex = "1";
-    header.appendChild(spacer);
+      const spacer = document.createElement("span");
+      spacer.style.flex = "1";
+      header.appendChild(spacer);
 
-    const fullscreenButton = iconButton(ICON_EXPAND, "Toggle fullscreen");
-    fullscreenButton.addEventListener("click", () => {
-      try {
-        handle.setFullscreen(!handle.isFullscreen());
-      } catch (_) {
-        // Stale handle (e.g. ui_panels revoked) — nothing to do.
-      }
-    });
-    header.appendChild(fullscreenButton);
+      const fullscreenButton = iconButton(ICON_EXPAND, "Toggle fullscreen");
+      fullscreenButton.addEventListener("click", () => {
+        try {
+          handle.setFullscreen(!handle.isFullscreen());
+        } catch (_) {
+          // Stale handle (e.g. ui_panels revoked) — nothing to do.
+        }
+      });
+      header.appendChild(fullscreenButton);
 
-    const closeButton = iconButton(ICON_CLOSE, "Close preview widget");
-    closeButton.addEventListener("click", () => closeFloatWidget());
-    header.appendChild(closeButton);
+      const closeButton = iconButton(ICON_CLOSE, "Close preview widget");
+      closeButton.addEventListener("click", () => closeFloatWidget());
+      header.appendChild(closeButton);
 
-    wroot.appendChild(header);
+      wroot.appendChild(header);
+    }
 
     floatView = createPreviewView();
     wroot.appendChild(floatView.element);
     if (latestState) floatView.render(latestState);
 
-    // ── Size strip: explicit resize via setSize (the API has no native
-    //    drag-resize for float widgets) ──
+    // ── Size strip: explicit resize via setSize (the published types carry
+    //    no drag-resize option for float widgets) ──
     const sizeStrip = document.createElement("div");
     sizeStrip.style.cssText =
       "display:flex;align-items:center;gap:6px;padding:6px 8px;flex:0 0 auto;border-top:1px solid rgba(128,128,128,0.25);font-size:12px;";
@@ -226,7 +283,7 @@ export function setup(ctx: SpindleFrontendContext) {
     sizeStrip.appendChild(wLabel);
 
     const widthInput = document.createElement("input");
-    configureSizeInput(widthInput, "Widget width", floatSize.width, FLOAT_MIN_WIDTH, FLOAT_MAX_WIDTH);
+    configureSizeInput(widthInput, "Widget width", floatSize.width, sizeClamps.minWidth, sizeClamps.maxWidth);
     sizeStrip.appendChild(widthInput);
 
     const separator = document.createElement("span");
@@ -240,7 +297,7 @@ export function setup(ctx: SpindleFrontendContext) {
     sizeStrip.appendChild(hLabel);
 
     const heightInput = document.createElement("input");
-    configureSizeInput(heightInput, "Widget height", floatSize.height, FLOAT_MIN_HEIGHT, FLOAT_MAX_HEIGHT);
+    configureSizeInput(heightInput, "Widget height", floatSize.height, sizeClamps.minHeight, sizeClamps.maxHeight);
     sizeStrip.appendChild(heightInput);
 
     const applyButton = document.createElement("button");
@@ -252,8 +309,8 @@ export function setup(ctx: SpindleFrontendContext) {
     sizeStrip.appendChild(applyButton);
 
     function applySize() {
-      const width = clampInt(widthInput.value, floatSize.width, FLOAT_MIN_WIDTH, FLOAT_MAX_WIDTH);
-      const height = clampInt(heightInput.value, floatSize.height, FLOAT_MIN_HEIGHT, FLOAT_MAX_HEIGHT);
+      const width = clampInt(widthInput.value, floatSize.width, sizeClamps.minWidth, sizeClamps.maxWidth);
+      const height = clampInt(heightInput.value, floatSize.height, sizeClamps.minHeight, sizeClamps.maxHeight);
       widthInput.value = String(width);
       heightInput.value = String(height);
       floatSize = { width, height };
@@ -334,15 +391,21 @@ export function setup(ctx: SpindleFrontendContext) {
     unsubDesktopReturned = listenForDesktopReturn(handle);
   }
 
+  if (isWidgetWindow) {
+    openFloatWidget();
+  }
+
   return () => {
     disposed = true;
     ++requestVersion;
     clearInterval(selectionTimer);
     closeFloatWidget();
-    try { unsubDrawerView(); } catch (_) {}
-    try { unsubActivate(); } catch (_) {}
+    try { unsubDrawerView?.(); } catch (_) {}
+    try { unsubActivate?.(); } catch (_) {}
     try { unsubChatSwitched(); } catch (_) {}
     try { unsubCharEdited(); } catch (_) {}
-    try { tab.destroy(); } catch (_) {}
+    for (const step of teardownSteps) {
+      try { step(); } catch (_) {}
+    }
   };
 }

@@ -45,12 +45,13 @@ function installDomStub() {
   };
 }
 
-function installWindowStub() {
+function installWindowStub(search?: string) {
   const saved = (globalThis as any).window;
   const listeners: Record<string, (event: unknown) => void> = {};
   (globalThis as any).window = {
     addEventListener(type: string, handler: (event: unknown) => void) { listeners[type] = handler; },
     removeEventListener(type: string) { delete listeners[type]; },
+    ...(search !== undefined ? { location: { search } } : {}),
   };
   return {
     listeners,
@@ -295,6 +296,87 @@ test("float widget creation failure (e.g. revoked ui_panels) is tolerated", asyn
   } finally {
     cleanup?.();
     interval.restore();
+    dom.restore();
+  }
+});
+
+test("desktop pop-out window auto-creates the widget without drawer chrome", async () => {
+  const dom = installDomStub();
+  const interval = installIntervalStub();
+  let characterId: string | null = "a";
+  let created = 0;
+  let destroyCount = 0;
+  const sizes: [number, number][] = [];
+  const createdOptions: Record<string, unknown>[] = [];
+  let registerDrawerTabCalls = 0;
+
+  const makeCtx = () => ({
+    ui: {
+      registerDrawerTab: () => { registerDrawerTabCalls++; return { root: { style: {}, appendChild() {} },
+        onActivate: () => () => {}, destroy() {} }; },
+      createFloatWidget(options: Record<string, unknown>) {
+        created++;
+        createdOptions.push(options);
+        return {
+          ...makeFloatWidgetHandle(),
+          setSize(width: number, height: number) { sizes.push([width, height]); },
+          destroy() { destroyCount++; },
+        };
+      },
+    },
+    getActiveChat: () => ({ characterId }),
+    characters: { get: () => Promise.resolve({ creator_notes: "<b>popout notes</b>" }) },
+    events: { on: () => () => {} },
+  });
+
+  // A pop-out URL for a different extension must NOT trigger widget mode.
+  let win = installWindowStub("?desktopWidgetExtension=someone_else&desktopWidgetWidth=500&desktopWidgetHeight=400");
+  let cleanup = setup(makeCtx() as any);
+  await flush();
+  expect(created).toBe(0);
+  expect(registerDrawerTabCalls).toBe(1);
+  const drawerPhaseFrames = dom.frames.length;
+  const drawerPhaseButtons = dom.buttons().length;
+  const drawerPhaseInputs = dom.nodes.filter((n) => n.tag === "input").length;
+  cleanup();
+  win.restore();
+
+  // Our extension's pop-out URL: widget created immediately, no drawer tab.
+  win = installWindowStub(
+    "?desktopWidgetExtension=creator_notes_html_renderer&desktopWidgetIndex=0" +
+    "&desktopWidgetTitle=Creator%20Notes%20HTML%20Renderer&desktopWidgetWidth=500&desktopWidgetHeight=400",
+  );
+  try {
+    cleanup = setup(makeCtx() as any);
+    expect(created).toBe(1);
+    expect(createdOptions[0]).toMatchObject({ width: 500, height: 400 });
+    expect(registerDrawerTabCalls).toBe(1); // unchanged from the foreign-extension phase
+    await flush();
+    expect(dom.frames).toHaveLength(drawerPhaseFrames + 1);
+    expect(dom.frames[dom.frames.length - 1].srcdoc).toContain("popout notes");
+
+    // No in-widget chrome in a pop-out: the native window owns title/close.
+    const widgetButtons = dom.buttons().slice(drawerPhaseButtons);
+    const titles = widgetButtons.map((b) => b.title);
+    expect(titles).not.toContain("Close preview widget");
+    expect(titles).not.toContain("Toggle fullscreen");
+    expect(widgetButtons.map((b) => b.textContent)).toEqual(["Apply"]);
+
+    // Size strip uses the desktop pop-out clamps (160–1200 × 100–900).
+    const inputs = dom.nodes.filter((n) => n.tag === "input").slice(drawerPhaseInputs);
+    expect(inputs.map((n) => n.value)).toEqual(["500", "400"]);
+    inputs[0].value = "2000";
+    inputs[1].value = "50";
+    widgetButtons[0].handlers.click();
+    expect(sizes).toEqual([[1200, 100]]);
+
+    cleanup();
+    expect(destroyCount).toBe(1);
+    expect(interval.cleared).toBe(true);
+  } finally {
+    cleanup?.();
+    interval.restore();
+    win.restore();
     dom.restore();
   }
 });
