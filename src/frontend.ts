@@ -323,7 +323,57 @@ export function setup(ctx: SpindleFrontendContext) {
   let floatView: ReturnType<typeof createPreviewView> | null = null;
   let unsubFloatView: (() => void) | null = null;
   let unsubDesktopReturned: (() => void) | null = null;
+  let floatResizeObserver: ResizeObserver | null = null;
+  let floatHeightTimer: ReturnType<typeof setTimeout> | null = null;
   let floatSize = desktopWidget ?? { width: 420, height: 560 };
+
+  /** Some hosts size the widget's container with min-height only (the desktop
+   *  pop-out uses `minHeight: calc(100vh - 30px)`), which breaks height:100%
+   *  chains and collapses the iframe to its intrinsic 150px box. Give the root
+   *  an explicit pixel height measured from the host container, and keep it in
+   *  sync as the widget/window resizes. */
+  function syncFloatRootHeight(wroot: HTMLElement) {
+    const parent = wroot.parentElement;
+    const available = parent && typeof parent.clientHeight === "number" && parent.clientHeight > 0
+      ? parent.clientHeight
+      : 0;
+    wroot.style.height = available > 0 ? `${available}px` : "100%";
+  }
+
+  function stopFloatRootHeightWatch() {
+    floatResizeObserver?.disconnect();
+    floatResizeObserver = null;
+    if (floatHeightTimer !== null) {
+      clearTimeout(floatHeightTimer);
+      floatHeightTimer = null;
+    }
+  }
+
+  function watchFloatRootHeight(wroot: HTMLElement) {
+    stopFloatRootHeightWatch();
+    const attach = (): boolean => {
+      const parent = wroot.parentElement;
+      if (!parent) return false;
+      syncFloatRootHeight(wroot);
+      if (typeof ResizeObserver !== "undefined") {
+        floatResizeObserver = new ResizeObserver(() => syncFloatRootHeight(wroot));
+        floatResizeObserver.observe(parent);
+      }
+      return true;
+    };
+    if (attach()) return;
+    // Hosts attach widget roots asynchronously (after paint), so retry until
+    // the root has a parent to measure — bounded to ~10s.
+    let attempts = 0;
+    const retry = () => {
+      if (disposed || attach() || ++attempts >= 40) {
+        floatHeightTimer = null;
+        return;
+      }
+      floatHeightTimer = setTimeout(retry, 250);
+    };
+    floatHeightTimer = setTimeout(retry, 250);
+  }
 
   function mountFloatContent(handle: SpindleFloatWidgetHandle) {
     const wroot = handle.root;
@@ -426,6 +476,7 @@ export function setup(ctx: SpindleFrontendContext) {
     }
 
     wroot.appendChild(sizeStrip);
+    watchFloatRootHeight(wroot);
   }
 
   function listenForDesktopReturn(handle: SpindleFloatWidgetHandle): (() => void) | null {
@@ -450,6 +501,7 @@ export function setup(ctx: SpindleFrontendContext) {
     unsubFloatView = null;
     unsubDesktopReturned?.();
     unsubDesktopReturned = null;
+    stopFloatRootHeightWatch();
     floatView = null;
     if (floatHandle) {
       try { floatHandle.destroy(); } catch (_) {}

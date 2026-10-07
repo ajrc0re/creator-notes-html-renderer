@@ -901,7 +901,47 @@ function setup(ctx) {
   let floatView = null;
   let unsubFloatView = null;
   let unsubDesktopReturned = null;
+  let floatResizeObserver = null;
+  let floatHeightTimer = null;
   let floatSize = desktopWidget ?? { width: 420, height: 560 };
+  function syncFloatRootHeight(wroot) {
+    const parent = wroot.parentElement;
+    const available = parent && typeof parent.clientHeight === "number" && parent.clientHeight > 0 ? parent.clientHeight : 0;
+    wroot.style.height = available > 0 ? `${available}px` : "100%";
+  }
+  function stopFloatRootHeightWatch() {
+    floatResizeObserver?.disconnect();
+    floatResizeObserver = null;
+    if (floatHeightTimer !== null) {
+      clearTimeout(floatHeightTimer);
+      floatHeightTimer = null;
+    }
+  }
+  function watchFloatRootHeight(wroot) {
+    stopFloatRootHeightWatch();
+    const attach = () => {
+      const parent = wroot.parentElement;
+      if (!parent)
+        return false;
+      syncFloatRootHeight(wroot);
+      if (typeof ResizeObserver !== "undefined") {
+        floatResizeObserver = new ResizeObserver(() => syncFloatRootHeight(wroot));
+        floatResizeObserver.observe(parent);
+      }
+      return true;
+    };
+    if (attach())
+      return;
+    let attempts = 0;
+    const retry = () => {
+      if (disposed || attach() || ++attempts >= 40) {
+        floatHeightTimer = null;
+        return;
+      }
+      floatHeightTimer = setTimeout(retry, 250);
+    };
+    floatHeightTimer = setTimeout(retry, 250);
+  }
   function mountFloatContent(handle) {
     const wroot = handle.root;
     wroot.style.cssText = "display:flex;flex-direction:column;width:100%;height:100%;min-width:0;min-height:0;font-family:inherit;color:inherit;";
@@ -976,6 +1016,7 @@ function setup(ctx) {
       });
     }
     wroot.appendChild(sizeStrip);
+    watchFloatRootHeight(wroot);
   }
   function listenForDesktopReturn(handle) {
     if (typeof window === "undefined" || typeof window.addEventListener !== "function")
@@ -999,6 +1040,7 @@ function setup(ctx) {
     unsubFloatView = null;
     unsubDesktopReturned?.();
     unsubDesktopReturned = null;
+    stopFloatRootHeightWatch();
     floatView = null;
     if (floatHandle) {
       try {

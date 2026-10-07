@@ -104,6 +104,8 @@ function makeFloatWidgetHandle() {
   const root = globalThis.document.createElement("div") as unknown as StubNode;
   // Mimic the host stamping every placement root with the runtime extension UUID.
   root.setAttribute("data-spindle-extension-root", "runtime-uuid-test");
+  // Mimic an attached host container with a measurable height.
+  (root as any).parentElement = { clientHeight: 480 };
   return {
     root: root as unknown as HTMLElement,
     widgetId: "w1",
@@ -362,11 +364,13 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
       createFloatWidget(options: Record<string, unknown>) {
         created++;
         createdOptions.push(options);
-        return {
+        const handle = {
           ...makeFloatWidgetHandle(),
           setSize(width: number, height: number) { sizes.push([width, height]); },
           destroy() { destroyCount++; },
         };
+        roots.push(handle.root as unknown as StubNode);
+        return handle;
       },
     },
     // A real pop-out window never learns the active chat (ChatView never
@@ -381,6 +385,7 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
 
   let isWidgetPhase = false;
   const reads: string[] = [];
+  const roots: StubNode[] = [];
 
   try {
     // Phase 1 — main window: no widget params; drawer tab teaches us the
@@ -422,6 +427,9 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     expect(created).toBe(1);
     expect(createdOptions[0]).toMatchObject({ width: 500, height: 400 });
     expect(registerDrawerTabCalls).toBe(2); // unchanged from the foreign phase
+    // The layout guard gives the root an explicit pixel height from the host
+    // container instead of an unresolvable height:100% chain.
+    expect(roots[0].style.height).toBe("480px");
     await flush();
     expect(dom.frames).toHaveLength(drawerPhaseFrames + 1);
     expect(dom.frames[dom.frames.length - 1].srcdoc).toContain("notes for a");
