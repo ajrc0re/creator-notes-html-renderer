@@ -666,13 +666,45 @@ function createPreviewView() {
 
 // src/frontend.ts
 var EXTENSION_ID = "creator_notes_html_renderer";
+var RUNTIME_ID_ATTRIBUTE = "data-spindle-extension-root";
+var RUNTIME_ID_STORAGE_KEY = `${EXTENSION_ID}:runtimeExtensionId`;
+function extensionIdFromRoot(root) {
+  try {
+    const id = root?.getAttribute?.(RUNTIME_ID_ATTRIBUTE);
+    return typeof id === "string" && id.length > 0 ? id : null;
+  } catch (_) {
+    return null;
+  }
+}
+function getRuntimeExtensionId() {
+  try {
+    const id = typeof localStorage === "undefined" ? null : localStorage.getItem(RUNTIME_ID_STORAGE_KEY);
+    return typeof id === "string" && id.length > 0 ? id : null;
+  } catch (_) {
+    return null;
+  }
+}
+function rememberRuntimeExtensionId(root) {
+  const id = extensionIdFromRoot(root);
+  if (id) {
+    try {
+      if (typeof localStorage !== "undefined")
+        localStorage.setItem(RUNTIME_ID_STORAGE_KEY, id);
+    } catch (_) {}
+  }
+  return id;
+}
 var DESKTOP_WIDGET_RETURNED_EVENT = "spindle:desktop-widget-returned";
 function readDesktopWidgetTarget() {
   if (typeof window === "undefined" || typeof window.location === "undefined")
     return null;
   try {
     const params = new URLSearchParams(window.location.search);
-    if (params.get("desktopWidgetExtension") !== EXTENSION_ID)
+    const targetId = params.get("desktopWidgetExtension");
+    if (!targetId)
+      return null;
+    const knownId = getRuntimeExtensionId();
+    if (knownId && targetId !== knownId)
       return null;
     const width = Number(params.get("desktopWidgetWidth"));
     const height = Number(params.get("desktopWidgetHeight"));
@@ -774,6 +806,7 @@ function setup(ctx) {
   let drawerView = null;
   let unsubDrawerView = null;
   let unsubActivate = null;
+  let runtimeExtensionId = getRuntimeExtensionId();
   if (!isWidgetWindow) {
     const tab = ctx.ui.registerDrawerTab({
       id: "html_preview",
@@ -807,6 +840,7 @@ function setup(ctx) {
     root.appendChild(drawerView.element);
     unsubDrawerView = subscribe(drawerView.render);
     unsubActivate = tab.onActivate(() => loadCreatorNotes());
+    runtimeExtensionId = rememberRuntimeExtensionId(tab.root) ?? runtimeExtensionId;
     teardownSteps.push(() => {
       try {
         tab.destroy();
@@ -906,7 +940,9 @@ function setup(ctx) {
       return null;
     const handler = (event) => {
       const detail = event.detail;
-      if (!detail || detail.widgetId !== handle.widgetId || detail.extensionId !== EXTENSION_ID)
+      if (!detail || detail.widgetId !== handle.widgetId)
+        return;
+      if (typeof detail.extensionId === "string" && runtimeExtensionId && detail.extensionId !== runtimeExtensionId)
         return;
       if (floatHandle !== handle)
         return;
@@ -956,6 +992,7 @@ function setup(ctx) {
     floatHandle = handle;
     unsubFloatView = subscribe((state) => floatView?.render(state));
     mountFloatContent(handle);
+    runtimeExtensionId = rememberRuntimeExtensionId(handle.root) ?? runtimeExtensionId;
     unsubDesktopReturned = listenForDesktopReturn(handle);
   }
   if (isWidgetWindow) {

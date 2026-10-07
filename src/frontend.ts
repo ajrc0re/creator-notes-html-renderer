@@ -5,8 +5,44 @@ import type {
 } from "lumiverse-spindle-types";
 import { createPreviewView, type PreviewState } from "./preview-view";
 
-/** Must match `identifier` in spindle.json — used to scope desktop pop-out events. */
+/** Must match `identifier` in spindle.json. */
 const EXTENSION_ID = "creator_notes_html_renderer";
+
+/** Lumiverse identifies installed extensions at runtime by a server-assigned
+ *  UUID — NOT the manifest identifier, and it changes on every reinstall.
+ *  The host stamps that UUID on every placement root it hands us
+ *  (`data-spindle-extension-root`), so we read it off our roots and persist
+ *  it for pop-out windows to compare against. */
+const RUNTIME_ID_ATTRIBUTE = "data-spindle-extension-root";
+const RUNTIME_ID_STORAGE_KEY = `${EXTENSION_ID}:runtimeExtensionId`;
+
+function extensionIdFromRoot(root: HTMLElement | null | undefined): string | null {
+  try {
+    const id = root?.getAttribute?.(RUNTIME_ID_ATTRIBUTE);
+    return typeof id === "string" && id.length > 0 ? id : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function getRuntimeExtensionId(): string | null {
+  try {
+    const id = typeof localStorage === "undefined" ? null : localStorage.getItem(RUNTIME_ID_STORAGE_KEY);
+    return typeof id === "string" && id.length > 0 ? id : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function rememberRuntimeExtensionId(root: HTMLElement | null | undefined): string | null {
+  const id = extensionIdFromRoot(root);
+  if (id) {
+    try {
+      if (typeof localStorage !== "undefined") localStorage.setItem(RUNTIME_ID_STORAGE_KEY, id);
+    } catch (_) {}
+  }
+  return id;
+}
 
 /** Private Lumiverse Desktop event fired when a native pop-out widget is
  *  returned to the page (remounting its root). Not part of the published
@@ -16,7 +52,11 @@ const DESKTOP_WIDGET_RETURNED_EVENT = "spindle:desktop-widget-returned";
 /** Lumiverse Desktop opens a floating-widget pop-out as a *second frontend
  *  instance* in a native WebView whose URL carries these params. The
  *  extension is loaded in that window too and is expected to create its
- *  widget there; until it does, the window shows "Loading …" forever. */
+ *  widget there; until it does, the window shows "Loading …" forever.
+ *  `desktopWidgetExtension` carries the runtime UUID: when we know ours
+ *  (learned from a stamped root) we match precisely; otherwise we treat any
+ *  widget window as ours — harmless in a foreign window, where the host
+ *  filters widgets by its own target extension and would never render ours. */
 interface DesktopWidgetTarget {
   width: number;
   height: number;
@@ -31,7 +71,10 @@ function readDesktopWidgetTarget(): DesktopWidgetTarget | null {
   if (typeof window === "undefined" || typeof window.location === "undefined") return null;
   try {
     const params = new URLSearchParams(window.location.search);
-    if (params.get("desktopWidgetExtension") !== EXTENSION_ID) return null;
+    const targetId = params.get("desktopWidgetExtension");
+    if (!targetId) return null;
+    const knownId = getRuntimeExtensionId();
+    if (knownId && targetId !== knownId) return null;
     const width = Number(params.get("desktopWidgetWidth"));
     const height = Number(params.get("desktopWidgetHeight"));
     if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
@@ -157,6 +200,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let drawerView: ReturnType<typeof createPreviewView> | null = null;
   let unsubDrawerView: (() => void) | null = null;
   let unsubActivate: (() => void) | null = null;
+  let runtimeExtensionId = getRuntimeExtensionId();
 
   if (!isWidgetWindow) {
     const tab = ctx.ui.registerDrawerTab({
@@ -200,6 +244,12 @@ export function setup(ctx: SpindleFrontendContext) {
     root.appendChild(drawerView.element);
     unsubDrawerView = subscribe(drawerView.render);
     unsubActivate = tab.onActivate(() => loadCreatorNotes());
+
+    // Learn this install's runtime UUID from the host stamp so pop-out
+    // windows (which share localStorage but not this window's roots) can
+    // recognize their URL parameter. Rewritten on every load, so it stays
+    // correct across reinstalls.
+    runtimeExtensionId = rememberRuntimeExtensionId(tab.root) ?? runtimeExtensionId;
 
     teardownSteps.push(() => {
       try { tab.destroy(); } catch (_) {}
@@ -333,7 +383,9 @@ export function setup(ctx: SpindleFrontendContext) {
     if (typeof window === "undefined" || typeof window.addEventListener !== "function") return null;
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<DesktopWidgetReturnedDetail>).detail;
-      if (!detail || detail.widgetId !== handle.widgetId || detail.extensionId !== EXTENSION_ID) return;
+      if (!detail || detail.widgetId !== handle.widgetId) return;
+      // detail.extensionId is the runtime UUID, not the manifest identifier.
+      if (typeof detail.extensionId === "string" && runtimeExtensionId && detail.extensionId !== runtimeExtensionId) return;
       if (floatHandle !== handle) return;
       // The widget root was remounted on return from a native pop-out window:
       // rebuild the content, then pull fresh state from the backend.
@@ -388,6 +440,7 @@ export function setup(ctx: SpindleFrontendContext) {
     // (floatView is still null); mountFloatContent renders it once instead.
     unsubFloatView = subscribe((state) => floatView?.render(state));
     mountFloatContent(handle);
+    runtimeExtensionId = rememberRuntimeExtensionId(handle.root) ?? runtimeExtensionId;
     unsubDesktopReturned = listenForDesktopReturn(handle);
   }
 

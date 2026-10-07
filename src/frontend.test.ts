@@ -5,6 +5,7 @@ interface StubNode {
   tag: string;
   style: Record<string, string>;
   handlers: Record<string, () => void>;
+  attrs: Record<string, string>;
   children: StubNode[];
   innerHTML: string;
   textContent: string;
@@ -13,6 +14,7 @@ interface StubNode {
   type: string;
   firstChild: StubNode | null;
   setAttribute(name: string, value: string): void;
+  getAttribute(name: string): string | null;
   appendChild(child: StubNode): void;
   replaceChildren(...children: StubNode[]): void;
   addEventListener(type: string, handler: () => void): void;
@@ -25,9 +27,10 @@ function installDomStub() {
   globalThis.document = {
     createElement(tag: string) {
       const node: StubNode = {
-        tag, style: {}, handlers: {}, children: [], innerHTML: "", textContent: "",
+        tag, style: {}, handlers: {}, attrs: {}, children: [], innerHTML: "", textContent: "",
         title: "", srcdoc: "", type: "", firstChild: null,
-        setAttribute() {},
+        setAttribute(name, value) { this.attrs[name] = value; },
+        getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; },
         appendChild(child) { this.children.push(child); this.firstChild = child; },
         replaceChildren(...kids) { this.children = kids; this.firstChild = kids[0] ?? null; },
         addEventListener(type, handler) { this.handlers[type] = handler; },
@@ -42,6 +45,25 @@ function installDomStub() {
     nodes,
     buttons: () => nodes.filter((n) => n.tag === "button"),
     restore: () => { globalThis.document = saved as any; },
+  };
+}
+
+function installLocalStorageStub() {
+  const saved = (globalThis as any).localStorage;
+  const data = new Map<string, string>();
+  (globalThis as any).localStorage = {
+    getItem: (key: string) => (data.has(key) ? data.get(key)! : null),
+    setItem: (key: string, value: string) => { data.set(key, String(value)); },
+    removeItem: (key: string) => { data.delete(key); },
+    clear: () => { data.clear(); },
+  };
+  return {
+    seed(key: string, value: string) { data.set(key, value); },
+    drop(key: string) { data.delete(key); },
+    restore: () => {
+      if (saved === undefined) delete (globalThis as any).localStorage;
+      else (globalThis as any).localStorage = saved;
+    },
   };
 }
 
@@ -76,8 +98,11 @@ function installIntervalStub() {
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 function makeFloatWidgetHandle() {
+  const root = globalThis.document.createElement("div") as unknown as StubNode;
+  // Mimic the host stamping every placement root with the runtime extension UUID.
+  root.setAttribute("data-spindle-extension-root", "runtime-uuid-test");
   return {
-    root: globalThis.document.createElement("div") as unknown as HTMLElement,
+    root: root as unknown as HTMLElement,
     widgetId: "w1",
     moveTo() {},
     getPosition: () => ({ x: 0, y: 0 }),
@@ -187,14 +212,14 @@ test("float widget renders the preview, survives a desktop pop-out return, and c
     // Desktop pop-out returned to the page: rebuild + fresh backend read.
     const returned = win.listeners["spindle:desktop-widget-returned"];
     expect(returned).toBeDefined();
-    returned!({ detail: { widgetId: "w1", extensionId: "creator_notes_html_renderer" } });
+    returned!({ detail: { widgetId: "w1", extensionId: "runtime-uuid-test" } });
     await flush();
     expect(reads).toEqual(["a", "a"]); // fresh read after remount
     expect(dom.frames.length).toBeGreaterThanOrEqual(4); // rebuilt widget + broadcast refresh
     expect(dom.frames[dom.frames.length - 1].srcdoc).toContain("bold notes");
 
     // Events for other widgets/extensions are ignored.
-    returned!({ detail: { widgetId: "other", extensionId: "creator_notes_html_renderer" } });
+    returned!({ detail: { widgetId: "other", extensionId: "runtime-uuid-test" } });
     returned!({ detail: { widgetId: "w1", extensionId: "someone_else" } });
     await flush();
     expect(reads).toEqual(["a", "a"]);
@@ -230,7 +255,7 @@ test("float widget renders the preview, survives a desktop pop-out return, and c
     expect(sizes[sizes.length - 1]).toEqual([500, 900]);
 
     // The applied size survives a desktop pop-out return (footer remounts).
-    returned!({ detail: { widgetId: "w1", extensionId: "creator_notes_html_renderer" } });
+    returned!({ detail: { widgetId: "w1", extensionId: "runtime-uuid-test" } });
     await flush();
     const remountedInputs = inputs().slice(-2);
     expect(remountedInputs[0].value).toBe("500");
@@ -303,6 +328,7 @@ test("float widget creation failure (e.g. revoked ui_panels) is tolerated", asyn
 test("desktop pop-out window auto-creates the widget without drawer chrome", async () => {
   const dom = installDomStub();
   const interval = installIntervalStub();
+  const storage = installLocalStorageStub();
   let characterId: string | null = "a";
   let created = 0;
   let destroyCount = 0;
@@ -312,8 +338,16 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
 
   const makeCtx = () => ({
     ui: {
-      registerDrawerTab: () => { registerDrawerTabCalls++; return { root: { style: {}, appendChild() {} },
-        onActivate: () => () => {}, destroy() {} }; },
+      registerDrawerTab: () => {
+        registerDrawerTabCalls++;
+        const root = globalThis.document.createElement("div") as unknown as StubNode;
+        // The host stamps every placement root with the runtime extension UUID.
+        root.setAttribute("data-spindle-extension-root", "runtime-uuid-live");
+        return {
+          root: root as unknown as HTMLElement,
+          onActivate: () => () => {}, destroy() {},
+        };
+      },
       createFloatWidget(options: Record<string, unknown>) {
         created++;
         createdOptions.push(options);
@@ -329,28 +363,41 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     events: { on: () => () => {} },
   });
 
-  // A pop-out URL for a different extension must NOT trigger widget mode.
-  let win = installWindowStub("?desktopWidgetExtension=someone_else&desktopWidgetWidth=500&desktopWidgetHeight=400");
-  let cleanup = setup(makeCtx() as any);
-  await flush();
-  expect(created).toBe(0);
-  expect(registerDrawerTabCalls).toBe(1);
-  const drawerPhaseFrames = dom.frames.length;
-  const drawerPhaseButtons = dom.buttons().length;
-  const drawerPhaseInputs = dom.nodes.filter((n) => n.tag === "input").length;
-  cleanup();
-  win.restore();
-
-  // Our extension's pop-out URL: widget created immediately, no drawer tab.
-  win = installWindowStub(
-    "?desktopWidgetExtension=creator_notes_html_renderer&desktopWidgetIndex=0" +
-    "&desktopWidgetTitle=Creator%20Notes%20HTML%20Renderer&desktopWidgetWidth=500&desktopWidgetHeight=400",
-  );
   try {
+    // Phase 1 — main window: no widget params; drawer tab teaches us the
+    // runtime UUID via the host stamp and persists it for pop-out windows.
+    let win = installWindowStub();
+    let cleanup = setup(makeCtx() as any);
+    await flush();
+    expect(created).toBe(0);
+    expect(registerDrawerTabCalls).toBe(1);
+    expect((globalThis as any).localStorage.getItem("creator_notes_html_renderer:runtimeExtensionId"))
+      .toBe("runtime-uuid-live");
+    cleanup();
+    win.restore();
+
+    // Phase 2 — a pop-out URL for a DIFFERENT extension must not trigger
+    // widget mode (the known UUID does not match).
+    win = installWindowStub("?desktopWidgetExtension=someone_else&desktopWidgetWidth=500&desktopWidgetHeight=400");
+    cleanup = setup(makeCtx() as any);
+    await flush();
+    expect(created).toBe(0);
+    expect(registerDrawerTabCalls).toBe(2);
+    cleanup();
+    win.restore();
+
+    // Phase 3 — our own pop-out URL: widget created immediately, no drawer tab.
+    win = installWindowStub(
+      "?desktopWidgetExtension=runtime-uuid-live&desktopWidgetIndex=0" +
+      "&desktopWidgetTitle=Creator%20Notes%20HTML%20Renderer&desktopWidgetWidth=500&desktopWidgetHeight=400",
+    );
+    const drawerPhaseFrames = dom.frames.length;
+    const drawerPhaseButtons = dom.buttons().length;
+    const drawerPhaseInputs = dom.nodes.filter((n) => n.tag === "input").length;
     cleanup = setup(makeCtx() as any);
     expect(created).toBe(1);
     expect(createdOptions[0]).toMatchObject({ width: 500, height: 400 });
-    expect(registerDrawerTabCalls).toBe(1); // unchanged from the foreign-extension phase
+    expect(registerDrawerTabCalls).toBe(2); // unchanged from the foreign phase
     await flush();
     expect(dom.frames).toHaveLength(drawerPhaseFrames + 1);
     expect(dom.frames[dom.frames.length - 1].srcdoc).toContain("popout notes");
@@ -373,10 +420,20 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     cleanup();
     expect(destroyCount).toBe(1);
     expect(interval.cleared).toBe(true);
-  } finally {
-    cleanup?.();
-    interval.restore();
     win.restore();
+
+    // Phase 4 — no persisted UUID (fresh profile / blocked storage): fall
+    // back to treating any widget window as ours so the widget still renders.
+    storage.drop("creator_notes_html_renderer:runtimeExtensionId");
+    win = installWindowStub("?desktopWidgetExtension=unknown-id&desktopWidgetWidth=300&desktopWidgetHeight=250");
+    cleanup = setup(makeCtx() as any);
+    expect(created).toBe(2);
+    expect(createdOptions[1]).toMatchObject({ width: 300, height: 250 });
+    cleanup();
+    win.restore();
+  } finally {
+    storage.restore();
+    interval.restore();
     dom.restore();
   }
 });
