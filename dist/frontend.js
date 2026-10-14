@@ -755,6 +755,24 @@ var DESKTOP_SIZE_CLAMPS = {
   maxWidth: 1200,
   maxHeight: 900
 };
+var PERSIST_GEOMETRY_KEY = "html-preview";
+var FLOAT_SIZE_STORAGE_KEY = `${EXTENSION_ID}:floatSize`;
+function readPersistedFloatSize(fallback) {
+  try {
+    const raw = typeof localStorage === "undefined" ? null : localStorage.getItem(FLOAT_SIZE_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (parsed && typeof parsed === "object" && Number.isFinite(parsed.width) && Number.isFinite(parsed.height) && parsed.width >= 160 && parsed.width <= 1920 && parsed.height >= 100 && parsed.height <= 1200) {
+      return { width: Math.round(parsed.width), height: Math.round(parsed.height) };
+    }
+  } catch (_) {}
+  return fallback;
+}
+function writePersistedFloatSize(size) {
+  try {
+    if (typeof localStorage !== "undefined")
+      localStorage.setItem(FLOAT_SIZE_STORAGE_KEY, JSON.stringify(size));
+  } catch (_) {}
+}
 function clampInt(raw, fallback, min, max) {
   const parsed = Number.parseInt(raw, 10);
   if (Number.isNaN(parsed))
@@ -902,8 +920,9 @@ function setup(ctx) {
   let unsubFloatView = null;
   let unsubDesktopReturned = null;
   let floatResizeObserver = null;
+  let floatRootObserver = null;
   let floatHeightTimer = null;
-  let floatSize = desktopWidget ?? { width: 420, height: 560 };
+  let floatSize = readPersistedFloatSize(desktopWidget ?? { width: 420, height: 560 });
   function syncFloatRootHeight(wroot) {
     const parent = wroot.parentElement;
     const available = parent && typeof parent.clientHeight === "number" && parent.clientHeight > 0 ? parent.clientHeight : 0;
@@ -912,6 +931,8 @@ function setup(ctx) {
   function stopFloatRootHeightWatch() {
     floatResizeObserver?.disconnect();
     floatResizeObserver = null;
+    floatRootObserver?.disconnect();
+    floatRootObserver = null;
     if (floatHeightTimer !== null) {
       clearTimeout(floatHeightTimer);
       floatHeightTimer = null;
@@ -1004,6 +1025,7 @@ function setup(ctx) {
       widthInput.value = String(width);
       heightInput.value = String(height);
       floatSize = { width, height };
+      writePersistedFloatSize(floatSize);
       try {
         handle.setSize(width, height);
       } catch (_) {}
@@ -1017,6 +1039,25 @@ function setup(ctx) {
     }
     wroot.appendChild(sizeStrip);
     watchFloatRootHeight(wroot);
+    if (typeof ResizeObserver !== "undefined") {
+      floatRootObserver?.disconnect();
+      floatRootObserver = new ResizeObserver(() => {
+        syncFloatRootHeight(wroot);
+        const width = Math.round(wroot.clientWidth);
+        const height = Math.round(wroot.clientHeight);
+        if (width > 0 && height > 0 && (width !== floatSize.width || height !== floatSize.height)) {
+          floatSize = { width, height };
+          writePersistedFloatSize(floatSize);
+        }
+        if (typeof document !== "undefined" && document.activeElement !== widthInput) {
+          widthInput.value = String(floatSize.width);
+        }
+        if (typeof document !== "undefined" && document.activeElement !== heightInput) {
+          heightInput.value = String(floatSize.height);
+        }
+      });
+      floatRootObserver.observe(wroot);
+    }
   }
   function listenForDesktopReturn(handle) {
     if (typeof window === "undefined" || typeof window.addEventListener !== "function")
@@ -1067,7 +1108,8 @@ function setup(ctx) {
         width: floatSize.width,
         height: floatSize.height,
         snapToEdge: true,
-        tooltip: "Creator notes HTML preview"
+        tooltip: "Creator notes HTML preview",
+        persistGeometry: PERSIST_GEOMETRY_KEY
       });
     } catch (err) {
       console.warn(`[${EXTENSION_ID}] failed to create float widget:`, err);
@@ -1077,6 +1119,11 @@ function setup(ctx) {
     unsubFloatView = subscribe((state) => floatView?.render(state));
     mountFloatContent(handle);
     runtimeExtensionId = rememberRuntimeExtensionId(handle.root) ?? runtimeExtensionId;
+    if (isWidgetWindow) {
+      try {
+        handle.setSize(floatSize.width, floatSize.height);
+      } catch (_) {}
+    }
     unsubDesktopReturned = listenForDesktopReturn(handle);
   }
   if (isWidgetWindow) {

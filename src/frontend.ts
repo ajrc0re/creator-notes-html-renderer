@@ -139,6 +139,38 @@ const DESKTOP_SIZE_CLAMPS: SizeClamps = {
   minWidth: 160, minHeight: 100, maxWidth: 1200, maxHeight: 900,
 };
 
+/** Host-side geometry persistence is opt-in per placement (persistGeometry);
+ *  the key just needs to be stable and pattern-safe. */
+const PERSIST_GEOMETRY_KEY = "html-preview";
+
+/** Our own record of the widget's live size. The host persists only sizes
+ *  committed through setSize/drag (native window edge resizes are never
+ *  committed), and the desktop pop-out re-seeds every newly created widget to
+ *  its size-at-open — so we track resizes ourselves and restore on creation. */
+const FLOAT_SIZE_STORAGE_KEY = `${EXTENSION_ID}:floatSize`;
+
+function readPersistedFloatSize(fallback: { width: number; height: number }): { width: number; height: number } {
+  try {
+    const raw = typeof localStorage === "undefined" ? null : localStorage.getItem(FLOAT_SIZE_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (
+      parsed && typeof parsed === "object" &&
+      Number.isFinite(parsed.width) && Number.isFinite(parsed.height) &&
+      parsed.width >= 160 && parsed.width <= 1920 &&
+      parsed.height >= 100 && parsed.height <= 1200
+    ) {
+      return { width: Math.round(parsed.width), height: Math.round(parsed.height) };
+    }
+  } catch (_) {}
+  return fallback;
+}
+
+function writePersistedFloatSize(size: { width: number; height: number }) {
+  try {
+    if (typeof localStorage !== "undefined") localStorage.setItem(FLOAT_SIZE_STORAGE_KEY, JSON.stringify(size));
+  } catch (_) {}
+}
+
 function clampInt(raw: string, fallback: number, min: number, max: number): number {
   const parsed = Number.parseInt(raw, 10);
   if (Number.isNaN(parsed)) return fallback;
@@ -324,8 +356,9 @@ export function setup(ctx: SpindleFrontendContext) {
   let unsubFloatView: (() => void) | null = null;
   let unsubDesktopReturned: (() => void) | null = null;
   let floatResizeObserver: ResizeObserver | null = null;
+  let floatRootObserver: ResizeObserver | null = null;
   let floatHeightTimer: ReturnType<typeof setTimeout> | null = null;
-  let floatSize = desktopWidget ?? { width: 420, height: 560 };
+  let floatSize = readPersistedFloatSize(desktopWidget ?? { width: 420, height: 560 });
 
   /** Some hosts size the widget's container with min-height only (the desktop
    *  pop-out uses `minHeight: calc(100vh - 30px)`), which breaks height:100%
@@ -343,6 +376,8 @@ export function setup(ctx: SpindleFrontendContext) {
   function stopFloatRootHeightWatch() {
     floatResizeObserver?.disconnect();
     floatResizeObserver = null;
+    floatRootObserver?.disconnect();
+    floatRootObserver = null;
     if (floatHeightTimer !== null) {
       clearTimeout(floatHeightTimer);
       floatHeightTimer = null;
@@ -463,6 +498,7 @@ export function setup(ctx: SpindleFrontendContext) {
       widthInput.value = String(width);
       heightInput.value = String(height);
       floatSize = { width, height };
+      writePersistedFloatSize(floatSize);
       try { handle.setSize(width, height); } catch (_) {
         // Stale handle (e.g. ui_panels revoked) — nothing to do.
       }
@@ -477,6 +513,29 @@ export function setup(ctx: SpindleFrontendContext) {
 
     wroot.appendChild(sizeStrip);
     watchFloatRootHeight(wroot);
+
+    // Track host-driven resizes (native window edges, in-page resize handles)
+    // so the size survives any widget recreation and the strip inputs never
+    // show stale values that an Apply would snap back to.
+    if (typeof ResizeObserver !== "undefined") {
+      floatRootObserver?.disconnect();
+      floatRootObserver = new ResizeObserver(() => {
+        syncFloatRootHeight(wroot);
+        const width = Math.round(wroot.clientWidth);
+        const height = Math.round(wroot.clientHeight);
+        if (width > 0 && height > 0 && (width !== floatSize.width || height !== floatSize.height)) {
+          floatSize = { width, height };
+          writePersistedFloatSize(floatSize);
+        }
+        if (typeof document !== "undefined" && document.activeElement !== widthInput) {
+          widthInput.value = String(floatSize.width);
+        }
+        if (typeof document !== "undefined" && document.activeElement !== heightInput) {
+          heightInput.value = String(floatSize.height);
+        }
+      });
+      floatRootObserver.observe(wroot);
+    }
   }
 
   function listenForDesktopReturn(handle: SpindleFloatWidgetHandle): (() => void) | null {
@@ -530,7 +589,8 @@ export function setup(ctx: SpindleFrontendContext) {
         height: floatSize.height,
         snapToEdge: true,
         tooltip: "Creator notes HTML preview",
-      });
+        persistGeometry: PERSIST_GEOMETRY_KEY,
+      } as Parameters<typeof ctx.ui.createFloatWidget>[0] & { persistGeometry?: string });
     } catch (err) {
       console.warn(`[${EXTENSION_ID}] failed to create float widget:`, err);
       return;
@@ -542,6 +602,12 @@ export function setup(ctx: SpindleFrontendContext) {
     unsubFloatView = subscribe((state) => floatView?.render(state));
     mountFloatContent(handle);
     runtimeExtensionId = rememberRuntimeExtensionId(handle.root) ?? runtimeExtensionId;
+    if (isWidgetWindow) {
+      // The pop-out host seeds every newly created widget back to its
+      // size-at-open (the URL params); re-assert the persisted live size so
+      // recreations keep what the user resized to.
+      try { handle.setSize(floatSize.width, floatSize.height); } catch (_) {}
+    }
     unsubDesktopReturned = listenForDesktopReturn(handle);
   }
 

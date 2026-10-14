@@ -98,6 +98,32 @@ function installIntervalStub() {
   };
 }
 
+function installResizeObserverStub() {
+  const saved = (globalThis as any).ResizeObserver;
+  const instances: Array<{ callback: () => void; targets: any[] }> = [];
+  (globalThis as any).ResizeObserver = class {
+    callback: () => void;
+    targets: any[] = [];
+    constructor(callback: () => void) {
+      this.callback = callback;
+      instances.push(this);
+    }
+    observe(target: any) { this.targets.push(target); }
+    unobserve() {}
+    disconnect() {}
+  };
+  return {
+    fire: (target: any) => {
+      const instance = instances.find((i) => i.targets.includes(target));
+      if (instance) instance.callback();
+    },
+    restore: () => {
+      if (saved === undefined) delete (globalThis as any).ResizeObserver;
+      else (globalThis as any).ResizeObserver = saved;
+    },
+  };
+}
+
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 function makeFloatWidgetHandle() {
@@ -342,6 +368,7 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
   const dom = installDomStub();
   const interval = installIntervalStub();
   const storage = installLocalStorageStub();
+  const ro = installResizeObserverStub();
   let characterId: string | null = "a";
   let created = 0;
   let destroyCount = 0;
@@ -415,7 +442,10 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     win.restore();
 
     // Phase 3 — our own pop-out URL: widget created immediately, no drawer
-    // tab, and the active character resolves through the mirror.
+    // tab, and the active character resolves through the mirror. A previously
+    // persisted size wins over the URL's size-at-open, and a post-creation
+    // setSize re-asserts it over the host's URL seeding.
+    storage.seed("creator_notes_html_renderer:floatSize", JSON.stringify({ width: 600, height: 700 }));
     win = installWindowStub(
       "?desktopWidgetExtension=runtime-uuid-live&desktopWidgetIndex=0" +
       "&desktopWidgetTitle=Creator%20Notes%20HTML%20Renderer&desktopWidgetWidth=500&desktopWidgetHeight=400",
@@ -425,7 +455,8 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     const drawerPhaseInputs = dom.nodes.filter((n) => n.tag === "input").length;
     cleanup = setup(makeCtx() as any);
     expect(created).toBe(1);
-    expect(createdOptions[0]).toMatchObject({ width: 500, height: 400 });
+    expect(createdOptions[0]).toMatchObject({ width: 600, height: 700, persistGeometry: "html-preview" });
+    expect(sizes[0]).toEqual([600, 700]); // post-creation override in pop-outs
     expect(registerDrawerTabCalls).toBe(2); // unchanged from the foreign phase
     // The layout guard gives the root an explicit pixel height from the host
     // container instead of an unresolvable height:100% chain.
@@ -450,13 +481,21 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     expect(titles).not.toContain("Toggle fullscreen");
     expect(widgetButtons.map((b) => b.textContent)).toEqual(["Apply"]);
 
+    // The strip starts at the persisted size; a host-driven resize (native
+    // window edges) is tracked live, persisted, and reflected in the inputs.
+    const inputs = () => dom.nodes.filter((n) => n.tag === "input").slice(drawerPhaseInputs);
+    expect(inputs().map((n) => n.value)).toEqual(["600", "700"]);
+    (roots[0] as any).clientWidth = 640;
+    (roots[0] as any).clientHeight = 520;
+    ro.fire(roots[0]);
+    expect(inputs().map((n) => n.value)).toEqual(["640", "520"]);
+    expect(storage.get("creator_notes_html_renderer:floatSize")).toBe('{"width":640,"height":520}');
+
     // Size strip uses the desktop pop-out clamps (160–1200 × 100–900).
-    const inputs = dom.nodes.filter((n) => n.tag === "input").slice(drawerPhaseInputs);
-    expect(inputs.map((n) => n.value)).toEqual(["500", "400"]);
-    inputs[0].value = "2000";
-    inputs[1].value = "50";
+    inputs()[0].value = "2000";
+    inputs()[1].value = "50";
     widgetButtons[0].handlers.click();
-    expect(sizes).toEqual([[1200, 100]]);
+    expect(sizes[1]).toEqual([1200, 100]);
 
     cleanup();
     expect(destroyCount).toBe(1);
@@ -464,17 +503,20 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     win.restore();
 
     // Phase 4 — no persisted UUID (fresh profile / blocked storage): fall
-    // back to treating any widget window as ours so the widget still renders.
+    // back to treating any widget window as ours so the widget still renders,
+    // at the last tracked size.
     storage.drop("creator_notes_html_renderer:runtimeExtensionId");
     win = installWindowStub("?desktopWidgetExtension=unknown-id&desktopWidgetWidth=300&desktopWidgetHeight=250");
     cleanup = setup(makeCtx() as any);
     expect(created).toBe(2);
-    expect(createdOptions[1]).toMatchObject({ width: 300, height: 250 });
+    expect(createdOptions[1]).toMatchObject({ width: 1200, height: 100 });
+    expect(sizes[2]).toEqual([1200, 100]);
     await flush();
     expect(dom.frames[dom.frames.length - 1].srcdoc).toContain("notes for b");
     cleanup();
     win.restore();
   } finally {
+    ro.restore();
     storage.restore();
     interval.restore();
     dom.restore();
