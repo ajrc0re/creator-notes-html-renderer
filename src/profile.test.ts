@@ -27,7 +27,11 @@ function card(id = "a", overrides: Partial<CharacterDTO> = {}): CharacterDTO {
   };
 }
 
-const actions = { listWorldBooks: async () => [{ id: "book-a", name: "The Ark" }], openWorldBook: async (_id: string) => {} };
+const actions = {
+  listWorldBooks: async () => [{ id: "book-a", name: "The Ark" }],
+  openWorldBook: async (_id: string) => {},
+  openEmbeddedLorebook: async (_characterId: string) => {},
+};
 
 function clickTab(root: HTMLElement, label: string) {
   const button = [...root.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((item) => item.textContent === label)!;

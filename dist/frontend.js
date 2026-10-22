@@ -4356,6 +4356,17 @@ function renderProfileMarkdown(text) {
 }
 
 // src/profile-view.ts
+function embeddedLorebook(character) {
+  const book = character.extensions?.character_book;
+  if (!book || typeof book !== "object")
+    return null;
+  const entries = book.entries;
+  const entryCount = Array.isArray(entries) ? entries.length : entries && typeof entries === "object" ? Object.keys(entries).length : 0;
+  if (entryCount === 0)
+    return null;
+  const name = typeof book.name === "string" && book.name.trim() ? book.name.trim() : "Embedded Lorebook";
+  return { name, entryCount };
+}
 var icons = {
   book: '<path d="M12 7v14m0-14C9 5 5 5 2 6v14c3-1 7-1 10 1 3-2 7-2 10-1V6c-3-1-7-1-10 1Z"/>',
   sparkles: '<path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3ZM20 2v4m-2-2h4"/>',
@@ -4473,14 +4484,35 @@ function createProfileView(actions) {
     bookList.className = "cnhr-books";
     books.appendChild(bookList);
     const ids = [...new Set(character.world_book_ids ?? [])];
-    if (!ids.length) {
+    const embedded = embeddedLorebook(character);
+    if (!ids.length && !embedded) {
       bookList.appendChild(prose("", "No world books attached"));
       return;
     }
-    const links = new Map;
     const status = document.createElement("p");
     status.className = "cnhr-book-status";
     status.setAttribute("role", "status");
+    if (embedded) {
+      const link = document.createElement("button");
+      link.type = "button";
+      link.className = "cnhr-book-link";
+      link.textContent = `${embedded.name} (${embedded.entryCount} entries)`;
+      link.title = "Open this character's editor to review or import its embedded lorebook";
+      link.addEventListener("click", async () => {
+        link.disabled = true;
+        status.textContent = "";
+        try {
+          await actions.openEmbeddedLorebook(character.id);
+        } catch (error) {
+          if (version === renderVersion)
+            status.textContent = `Could not open embedded lorebook: ${error}`;
+        } finally {
+          link.disabled = false;
+        }
+      });
+      bookList.appendChild(link);
+    }
+    const links = new Map;
     for (const [index, id] of ids.entries()) {
       const link = document.createElement("button");
       link.type = "button";
@@ -4503,18 +4535,20 @@ function createProfileView(actions) {
       links.set(id, link);
     }
     bookList.appendChild(status);
-    actions.listWorldBooks().then((available) => {
-      if (version !== renderVersion)
-        return;
-      for (const book of available) {
-        const link = links.get(book.id);
-        if (link)
-          link.textContent = book.name;
-      }
-    }).catch(() => {
-      if (version === renderVersion)
-        status.textContent = "World book names are unavailable. You can still open an attached book.";
-    });
+    if (ids.length) {
+      actions.listWorldBooks().then((available) => {
+        if (version !== renderVersion)
+          return;
+        for (const book of available) {
+          const link = links.get(book.id);
+          if (link)
+            link.textContent = book.name;
+        }
+      }).catch(() => {
+        if (version === renderVersion)
+          status.textContent = "World book names are unavailable. You can still open an attached book.";
+      });
+    }
   }
   return { element, render, clear() {
     ++renderVersion;
@@ -4687,16 +4721,45 @@ function createProfileActions(context, mode = "main") {
       throw new Error("The extension was reloaded. Please try again.");
     await ctx.host.surfaces.invoke({ kind: "modal", id: "world_book_editor" }, { id });
   }
+  async function openEmbeddedLorebookInMainWindow(characterId) {
+    if (disposed)
+      throw new Error("The extension was reloaded. Please try again.");
+    if (!ctx.host?.surfaces)
+      throw new Error("Update Lumiverse to open the character editor.");
+    await ctx.host.surfaces.invoke({ kind: "modal", id: "character_editor" }, { id: characterId });
+  }
+  function requestMainWindow(action, id) {
+    if (!channel)
+      throw new Error("Open this item from the main Lumiverse window.");
+    const requestId = crypto.randomUUID();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(requestId);
+        reject(new Error("The main Lumiverse window did not respond. Open it and try again."));
+      }, 120000);
+      pending.set(requestId, { resolve, reject, timer });
+      try {
+        channel?.postMessage({ type: action, requestId, id });
+      } catch (error) {
+        pending.delete(requestId);
+        clearTimeout(timer);
+        reject(error);
+      }
+    });
+  }
   if (channel)
     channel.onmessage = async ({ data }) => {
       if (disposed || !data || typeof data !== "object" || typeof data.requestId !== "string")
         return;
-      if (mode === "main" && data.type === "open" && typeof data.id === "string" && data.id.length > 0 && data.id.length <= 200) {
+      if (mode === "main" && (data.type === "open" || data.type === "open-character") && typeof data.id === "string" && data.id.length > 0 && data.id.length <= 200) {
         try {
           try {
             window.focus();
           } catch (_) {}
-          await openInMainWindow(data.id);
+          if (data.type === "open")
+            await openInMainWindow(data.id);
+          else
+            await openEmbeddedLorebookInMainWindow(data.id);
           if (!disposed)
             channel?.postMessage({ type: "result", requestId: data.requestId });
         } catch (error) {
@@ -4727,23 +4790,14 @@ function createProfileActions(context, mode = "main") {
         throw new Error("The extension was reloaded. Please try again.");
       if (mode !== "popout")
         return openInMainWindow(id);
-      if (!channel)
-        throw new Error("Open this world book from the main Lumiverse window.");
-      const requestId = crypto.randomUUID();
-      await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          pending.delete(requestId);
-          reject(new Error("The main Lumiverse window did not respond. Open it and try again."));
-        }, 120000);
-        pending.set(requestId, { resolve, reject, timer });
-        try {
-          channel.postMessage({ type: "open", requestId, id });
-        } catch (error) {
-          pending.delete(requestId);
-          clearTimeout(timer);
-          reject(error);
-        }
-      });
+      await requestMainWindow("open", id);
+    },
+    async openEmbeddedLorebook(characterId) {
+      if (disposed)
+        throw new Error("The extension was reloaded. Please try again.");
+      if (mode !== "popout")
+        return openEmbeddedLorebookInMainWindow(characterId);
+      await requestMainWindow("open-character", characterId);
     },
     dispose() {
       disposed = true;

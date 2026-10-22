@@ -4,6 +4,23 @@ import { renderProfileMarkdown } from "./profile-markdown";
 export interface ProfileActions {
   listWorldBooks(): Promise<Array<{ id: string; name: string }>>;
   openWorldBook(id: string): Promise<void>;
+  openEmbeddedLorebook(characterId: string): Promise<void>;
+}
+
+function embeddedLorebook(character: CharacterDTO): { name: string; entryCount: number } | null {
+  const book = character.extensions?.character_book;
+  if (!book || typeof book !== "object") return null;
+  const entries = book.entries;
+  const entryCount = Array.isArray(entries)
+    ? entries.length
+    : entries && typeof entries === "object"
+      ? Object.keys(entries).length
+      : 0;
+  if (entryCount === 0) return null;
+  const name = typeof book.name === "string" && book.name.trim()
+    ? book.name.trim()
+    : "Embedded Lorebook";
+  return { name, entryCount };
 }
 
 const icons = {
@@ -127,15 +144,36 @@ export function createProfileView(actions: ProfileActions) {
     bookList.className = "cnhr-books";
     books.appendChild(bookList);
     const ids = [...new Set(character.world_book_ids ?? [])];
-    if (!ids.length) {
+    const embedded = embeddedLorebook(character);
+    if (!ids.length && !embedded) {
       bookList.appendChild(prose("", "No world books attached"));
       return;
     }
 
-    const links = new Map<string, HTMLButtonElement>();
     const status = document.createElement("p");
     status.className = "cnhr-book-status";
     status.setAttribute("role", "status");
+    if (embedded) {
+      const link = document.createElement("button");
+      link.type = "button";
+      link.className = "cnhr-book-link";
+      link.textContent = `${embedded.name} (${embedded.entryCount} entries)`;
+      link.title = "Open this character's editor to review or import its embedded lorebook";
+      link.addEventListener("click", async () => {
+        link.disabled = true;
+        status.textContent = "";
+        try {
+          await actions.openEmbeddedLorebook(character.id);
+        } catch (error) {
+          if (version === renderVersion) status.textContent = `Could not open embedded lorebook: ${error}`;
+        } finally {
+          link.disabled = false;
+        }
+      });
+      bookList.appendChild(link);
+    }
+
+    const links = new Map<string, HTMLButtonElement>();
     for (const [index, id] of ids.entries()) {
       const link = document.createElement("button");
       link.type = "button";
@@ -157,15 +195,17 @@ export function createProfileView(actions: ProfileActions) {
       links.set(id, link);
     }
     bookList.appendChild(status);
-    void actions.listWorldBooks().then((available) => {
-      if (version !== renderVersion) return;
-      for (const book of available) {
-        const link = links.get(book.id);
-        if (link) link.textContent = book.name;
-      }
-    }).catch(() => {
-      if (version === renderVersion) status.textContent = "World book names are unavailable. You can still open an attached book.";
-    });
+    if (ids.length) {
+      void actions.listWorldBooks().then((available) => {
+        if (version !== renderVersion) return;
+        for (const book of available) {
+          const link = links.get(book.id);
+          if (link) link.textContent = book.name;
+        }
+      }).catch(() => {
+        if (version === renderVersion) status.textContent = "World book names are unavailable. You can still open an attached book.";
+      });
+    }
   }
 
   return { element, render, clear() { ++renderVersion; characterId = null; expanded.clear(); element.replaceChildren(); } };

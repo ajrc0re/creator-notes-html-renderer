@@ -1,6 +1,6 @@
 {
   "identifier": "creator_notes_html_renderer",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "name": "Creator Notes HTML Renderer",
   "author": "Ptolemaios",
   "description": "Creator notes HTML preview and a native-styled Markdown character profile in the drawer and floating window.",

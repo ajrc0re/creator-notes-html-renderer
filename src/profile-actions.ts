@@ -8,7 +8,7 @@ interface ProfileHostContext extends SpindleFrontendContext {
   };
   host?: {
     surfaces: {
-      invoke(ref: { kind: "modal"; id: "world_book_editor" }, params: { id: string }): void | Promise<void>;
+      invoke(ref: { kind: "modal"; id: "world_book_editor" | "character_editor" }, params: { id: string }): void | Promise<void>;
     };
   };
 }
@@ -40,12 +40,36 @@ export function createProfileActions(
     await ctx.host.surfaces.invoke({ kind: "modal", id: "world_book_editor" }, { id });
   }
 
+  async function openEmbeddedLorebookInMainWindow(characterId: string) {
+    if (disposed) throw new Error("The extension was reloaded. Please try again.");
+    if (!ctx.host?.surfaces) throw new Error("Update Lumiverse to open the character editor.");
+    await ctx.host.surfaces.invoke({ kind: "modal", id: "character_editor" }, { id: characterId });
+  }
+
+  function requestMainWindow(action: "open" | "open-character", id: string) {
+    if (!channel) throw new Error("Open this item from the main Lumiverse window.");
+    const requestId = crypto.randomUUID();
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(requestId);
+        reject(new Error("The main Lumiverse window did not respond. Open it and try again."));
+      }, 120_000);
+      pending.set(requestId, { resolve, reject, timer });
+      try { channel?.postMessage({ type: action, requestId, id }); } catch (error) {
+        pending.delete(requestId);
+        clearTimeout(timer);
+        reject(error);
+      }
+    });
+  }
+
   if (channel) channel.onmessage = async ({ data }) => {
     if (disposed || !data || typeof data !== "object" || typeof data.requestId !== "string") return;
-    if (mode === "main" && data.type === "open" && typeof data.id === "string" && data.id.length > 0 && data.id.length <= 200) {
+    if (mode === "main" && (data.type === "open" || data.type === "open-character") && typeof data.id === "string" && data.id.length > 0 && data.id.length <= 200) {
       try {
         try { window.focus(); } catch (_) {}
-        await openInMainWindow(data.id);
+        if (data.type === "open") await openInMainWindow(data.id);
+        else await openEmbeddedLorebookInMainWindow(data.id);
         if (!disposed) channel?.postMessage({ type: "result", requestId: data.requestId });
       } catch (error) {
         if (!disposed) channel?.postMessage({ type: "result", requestId: data.requestId, error: String(error) });
@@ -69,20 +93,12 @@ export function createProfileActions(
     async openWorldBook(id) {
       if (disposed) throw new Error("The extension was reloaded. Please try again.");
       if (mode !== "popout") return openInMainWindow(id);
-      if (!channel) throw new Error("Open this world book from the main Lumiverse window.");
-      const requestId = crypto.randomUUID();
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          pending.delete(requestId);
-          reject(new Error("The main Lumiverse window did not respond. Open it and try again."));
-        }, 120_000);
-        pending.set(requestId, { resolve, reject, timer });
-        try { channel.postMessage({ type: "open", requestId, id }); } catch (error) {
-          pending.delete(requestId);
-          clearTimeout(timer);
-          reject(error);
-        }
-      });
+      await requestMainWindow("open", id);
+    },
+    async openEmbeddedLorebook(characterId) {
+      if (disposed) throw new Error("The extension was reloaded. Please try again.");
+      if (mode !== "popout") return openEmbeddedLorebookInMainWindow(characterId);
+      await requestMainWindow("open-character", characterId);
     },
     dispose() {
       disposed = true;
