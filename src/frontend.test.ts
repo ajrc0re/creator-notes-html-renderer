@@ -479,7 +479,7 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     const titles = widgetButtons.map((b) => b.title);
     expect(titles).not.toContain("Close preview widget");
     expect(titles).not.toContain("Toggle fullscreen");
-    expect(widgetButtons.map((b) => b.textContent)).toEqual(["Apply"]);
+    expect(widgetButtons.map((b) => b.textContent)).toEqual(["Creator Notes", "Profile", "Apply"]);
 
     // The strip starts at the persisted size; a host-driven resize (native
     // window edges) is tracked live, persisted, and reflected in the inputs.
@@ -494,7 +494,7 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     // Size strip uses the desktop pop-out clamps (160–1200 × 100–900).
     inputs()[0].value = "2000";
     inputs()[1].value = "50";
-    widgetButtons[0].handlers.click();
+    widgetButtons.find((button) => button.textContent === "Apply")!.handlers.click();
     expect(sizes[1]).toEqual([1200, 100]);
 
     cleanup();

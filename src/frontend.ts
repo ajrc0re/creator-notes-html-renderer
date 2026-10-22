@@ -3,7 +3,8 @@ import type {
   SpindleFloatWidgetHandle,
   CharacterDTO,
 } from "lumiverse-spindle-types";
-import { createPreviewView, type PreviewState } from "./preview-view";
+import { createCharacterView, type CharacterState } from "./character-view";
+import { createProfileActions } from "./profile-actions";
 
 /** Must match `identifier` in spindle.json. */
 const EXTENSION_ID = "creator_notes_html_renderer";
@@ -218,20 +219,21 @@ export function setup(ctx: SpindleFrontendContext) {
   const isWidgetWindow = desktopWidget !== null;
   const sizeClamps = isWidgetWindow ? DESKTOP_SIZE_CLAMPS : BROWSER_SIZE_CLAMPS;
   const canMirrorActiveCharacter = !inAnyDesktopWidgetWindow();
+  const profileActions = createProfileActions(ctx, isWidgetWindow ? "popout" : canMirrorActiveCharacter ? "main" : "other");
 
   let disposed = false;
   let requestVersion = 0;
   let observedCharacterId: string | null | undefined;
-  let latestState: PreviewState | null = null;
-  const listeners = new Set<(state: PreviewState) => void>();
+  let latestState: CharacterState | null = null;
+  const listeners = new Set<(state: CharacterState) => void>();
 
-  function subscribe(listener: (state: PreviewState) => void): () => void {
+  function subscribe(listener: (state: CharacterState) => void): () => void {
     listeners.add(listener);
     if (latestState) listener(latestState);
     return () => listeners.delete(listener);
   }
 
-  function broadcast(state: PreviewState) {
+  function broadcast(state: CharacterState) {
     latestState = state;
     for (const listener of listeners) listener(state);
   }
@@ -247,37 +249,35 @@ export function setup(ctx: SpindleFrontendContext) {
     return null;
   }
 
-  async function loadCreatorNotes() {
+  async function loadCharacter() {
     if (disposed) return;
     const version = ++requestVersion;
     const characterId = resolveActiveCharacterId();
+    const selectionChanged = observedCharacterId !== characterId;
     observedCharacterId = characterId;
     if (!characterId) {
       broadcast({
         kind: "placeholder",
-        message: "Open a character in the editor to see a live HTML preview of their creator notes.",
+        message: "Select a character to view their creator notes and profile.",
       });
       return;
     }
 
+    if (selectionChanged) broadcast({ kind: "placeholder", message: "Loading character…" });
+
     try {
       const card = await ctx.characters.get(characterId) as CharacterDTO | null;
       if (disposed || version !== requestVersion || resolveActiveCharacterId() !== characterId) return;
-      const creatorNotes = card?.creator_notes ?? "";
-      if (!creatorNotes) {
-        broadcast({ kind: "placeholder", message: "Creator notes are empty." });
-      } else {
-        broadcast({ kind: "html", html: creatorNotes });
-      }
+      broadcast(card ? { kind: "character", character: card } : { kind: "placeholder", message: "Character is unavailable." });
     } catch (err) {
       if (disposed || version !== requestVersion || resolveActiveCharacterId() !== characterId) return;
-      broadcast({ kind: "error", message: `Failed to read creator notes: ${err}` });
+      broadcast({ kind: "error", message: `Failed to read character: ${err}` });
     }
   }
 
   // ── Drawer tab (main window only; a pop-out window renders no drawer) ──
   const teardownSteps: (() => void)[] = [];
-  let drawerView: ReturnType<typeof createPreviewView> | null = null;
+  let drawerView: ReturnType<typeof createCharacterView> | null = null;
   let unsubDrawerView: (() => void) | null = null;
   let unsubActivate: (() => void) | null = null;
   let runtimeExtensionId = getRuntimeExtensionId();
@@ -287,8 +287,8 @@ export function setup(ctx: SpindleFrontendContext) {
       id: "html_preview",
       title: "HTML Preview",
       shortName: "Preview",
-      description: "Renders HTML and CSS from the creator notes field as a live preview.",
-      keywords: ["html", "css", "preview", "creator notes", "render", "float", "widget"],
+      description: "Creator notes HTML preview and a collapsible Markdown character profile.",
+      keywords: ["html", "css", "preview", "creator notes", "profile", "character", "markdown", "lorebook", "float", "widget"],
       headerTitle: "HTML Preview",
       iconSvg: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>'
     });
@@ -301,7 +301,7 @@ export function setup(ctx: SpindleFrontendContext) {
       "display:flex;align-items:center;gap:8px;padding:6px 8px;flex:0 0 auto;border-bottom:1px solid rgba(128,128,128,0.25);";
 
     const toolbarLabel = document.createElement("span");
-    toolbarLabel.textContent = "Creator Notes";
+    toolbarLabel.textContent = "Character";
     toolbarLabel.style.cssText = "font-size:12px;opacity:0.6;";
     toolbar.appendChild(toolbarLabel);
 
@@ -318,12 +318,11 @@ export function setup(ctx: SpindleFrontendContext) {
     floatButton.addEventListener("click", () => openFloatWidget());
     toolbar.appendChild(floatButton);
 
-    root.appendChild(toolbar);
-
-    drawerView = createPreviewView();
+    drawerView = createCharacterView(profileActions, `${EXTENSION_ID}:drawerTab`);
     root.appendChild(drawerView.element);
+    root.appendChild(toolbar);
     unsubDrawerView = subscribe(drawerView.render);
-    unsubActivate = tab.onActivate(() => loadCreatorNotes());
+    unsubActivate = tab.onActivate(() => loadCharacter());
 
     // Learn this install's runtime UUID from the host stamp so pop-out
     // windows (which share localStorage but not this window's roots) can
@@ -336,23 +335,23 @@ export function setup(ctx: SpindleFrontendContext) {
     });
   }
 
-  loadCreatorNotes();
+  loadCharacter();
 
-  const unsubChatSwitched = ctx.events.on("CHAT_SWITCHED", () => loadCreatorNotes());
-  const unsubCharEdited = ctx.events.on("CHARACTER_EDITED", () => loadCreatorNotes());
+  const unsubChatSwitched = ctx.events.on("CHAT_SWITCHED", () => loadCharacter());
+  const unsubCharEdited = ctx.events.on("CHARACTER_EDITED", () => loadCharacter());
 
   // CHAT_SWITCHED can precede character hydration, and a pop-out learns the
   // active character only through the localStorage mirror. Read the resolved
   // snapshot; only fetch when selection changes, not on every timer tick.
   const selectionTimer = setInterval(() => {
     if (!disposed && resolveActiveCharacterId() !== observedCharacterId) {
-      void loadCreatorNotes();
+      void loadCharacter();
     }
   }, 500);
 
   // ── Floating widget ──
   let floatHandle: SpindleFloatWidgetHandle | null = null;
-  let floatView: ReturnType<typeof createPreviewView> | null = null;
+  let floatView: ReturnType<typeof createCharacterView> | null = null;
   let unsubFloatView: (() => void) | null = null;
   let unsubDesktopReturned: (() => void) | null = null;
   let floatResizeObserver: ResizeObserver | null = null;
@@ -451,7 +450,7 @@ export function setup(ctx: SpindleFrontendContext) {
       wroot.appendChild(header);
     }
 
-    floatView = createPreviewView();
+    floatView = createCharacterView(profileActions, `${EXTENSION_ID}:floatTab`);
     wroot.appendChild(floatView.element);
     if (latestState) floatView.render(latestState);
 
@@ -549,7 +548,7 @@ export function setup(ctx: SpindleFrontendContext) {
       // The widget root was remounted on return from a native pop-out window:
       // rebuild the content, then pull fresh state from the backend.
       mountFloatContent(handle);
-      void loadCreatorNotes();
+      void loadCharacter();
     };
     window.addEventListener(DESKTOP_WIDGET_RETURNED_EVENT, handler);
     return () => window.removeEventListener(DESKTOP_WIDGET_RETURNED_EVENT, handler);
@@ -588,7 +587,7 @@ export function setup(ctx: SpindleFrontendContext) {
         width: floatSize.width,
         height: floatSize.height,
         snapToEdge: true,
-        tooltip: "Creator notes HTML preview",
+        tooltip: "Creator notes and character profile",
         persistGeometry: PERSIST_GEOMETRY_KEY,
       } as Parameters<typeof ctx.ui.createFloatWidget>[0] & { persistGeometry?: string });
     } catch (err) {
@@ -619,6 +618,7 @@ export function setup(ctx: SpindleFrontendContext) {
     disposed = true;
     ++requestVersion;
     clearInterval(selectionTimer);
+    profileActions.dispose();
     closeFloatWidget();
     try { unsubDrawerView?.(); } catch (_) {}
     try { unsubActivate?.(); } catch (_) {}

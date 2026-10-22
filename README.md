@@ -1,10 +1,22 @@
 # Creator Notes HTML Renderer
 
-A Lumiverse Spindle extension that renders HTML and CSS from a character's creator notes as a live preview widget in the character editor.
+A Lumiverse Spindle extension with **Creator Notes** and **Profile** tabs in both the drawer and floating preview, including native desktop pop-out windows.
 
 ## What It Does
 
-When you're editing a character in the Identity tab, this extension shows a **float widget** that reads the `creator_notes` field and renders it as real HTML + CSS — images, styled tables, links, embedded stylesheets, all of it.
+The first tab, **Creator Notes**, reads the `creator_notes` field and renders it as real HTML + CSS — images, styled tables, links, embedded stylesheets, all of it.
+
+The second tab, **Profile**, renders the active character's definition as sanitized GitHub-flavored Markdown, using Lumiverse's theme colors and collapsible sections:
+
+- Description, Personality, and Scenario
+- System Prompt and Post-History Instructions
+- Message Examples and First Message
+- Alternate Greetings, each with a three-line preview and **Click to expand**
+- Attached World Books, with clickable names that open Lumiverse's Lorebook editor
+
+World book links in a native pop-out open the editor in the main Lumiverse window. Keep the main window open; any permission prompt is shown there as well.
+
+Empty fields show a short placeholder. Tabs and sections remain usable when creator notes are empty. Each placement remembers its selected tab; section expansion survives edits and tab changes, and resets for a different character. Switching characters immediately clears the old content while the new card loads.
 
 The preview updates whenever the character data changes.
 
@@ -13,25 +25,26 @@ The preview updates whenever the character data changes.
 1. Open the **Side Panel** (drawer → Extensions)
 2. Click **Add Extension** → **Install from Source**
 3. Paste the repo URL or point it at this directory via **Import Local**
-4. Enable the extension and grant the `characters` and `UI` permissions
+4. Enable the extension and grant the `characters` and `UI` permissions. Opening an attached world book also requires `world_books`; existing installs are prompted when a book is first opened.
 
 ## Permissions
 
 | Permission | Why |
 |---|---|
 | `ui_panels` | Mount the float widget (drawer tabs are free) |
-| `characters` | Read the active character's creator notes |
+| `characters` | Read the active character's creator notes and definition |
+| `world_books` | Open an attached world book in the native Lorebook editor |
 
 ## Usage
 
 1. Open any character in the character editor
 2. Open the **HTML Preview** drawer tab
 3. Write HTML + CSS in the creator notes field as normal
-4. The preview renders it live
+4. The preview renders it live; select **Profile** for the character's Markdown definition
 
 ### Floating Widget
 
-Click **Float preview** in the drawer tab toolbar to pop the preview out as a **floating widget** — the same live, sanitized preview in a draggable overlay window.
+Click **Float preview** in the drawer tab footer to pop the preview out as a **floating widget** — the same two tabs in a draggable overlay window.
 
 - Drag it anywhere; it snaps to the nearest screen edge when dropped
 - Use the expand button in the widget header to toggle fullscreen
@@ -80,7 +93,11 @@ The extension uses **three layers** of defense:
 ```
 src/
   backend.ts       RPC handler to read character creator notes
-  frontend.ts      Drawer tab + floating widget wiring and shared live-state pipeline
+  frontend.ts      Drawer tab + floating widget wiring and shared character-state pipeline
+  character-view.ts Shared Creator Notes / Profile tab strip and placement state
+  profile-view.ts  Collapsible character definition, greeting previews, and world book links
+  profile-markdown.ts  Marked + DOMPurify rendering for profile prose
+  profile-actions.ts  Native world book editor integration and permission request
   preview-view.ts  Shared preview surface (sanitized iframe) used by both placements
   sanitizer.ts     Three-layer sanitizer (entity decode → tag/attr filter → CSS sanitize)
 ```
