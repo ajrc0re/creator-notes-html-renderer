@@ -4890,17 +4890,19 @@ function inAnyDesktopWidgetWindow() {
     return false;
   }
 }
+var MAX_WIDGET_WIDTH = 7680;
+var MAX_WIDGET_HEIGHT = 4320;
 var BROWSER_SIZE_CLAMPS = {
   minWidth: 220,
   minHeight: 150,
-  maxWidth: 1920,
-  maxHeight: 1200
+  maxWidth: MAX_WIDGET_WIDTH,
+  maxHeight: MAX_WIDGET_HEIGHT
 };
 var DESKTOP_SIZE_CLAMPS = {
   minWidth: 160,
   minHeight: 100,
-  maxWidth: 1200,
-  maxHeight: 900
+  maxWidth: MAX_WIDGET_WIDTH,
+  maxHeight: MAX_WIDGET_HEIGHT
 };
 var PERSIST_GEOMETRY_KEY = "html-preview";
 var FLOAT_SIZE_STORAGE_KEY = `${EXTENSION_ID}:floatSize`;
@@ -4908,7 +4910,7 @@ function readPersistedFloatSize(fallback) {
   try {
     const raw = typeof localStorage === "undefined" ? null : localStorage.getItem(FLOAT_SIZE_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
-    if (parsed && typeof parsed === "object" && Number.isFinite(parsed.width) && Number.isFinite(parsed.height) && parsed.width >= 160 && parsed.width <= 1920 && parsed.height >= 100 && parsed.height <= 1200) {
+    if (parsed && typeof parsed === "object" && Number.isFinite(parsed.width) && Number.isFinite(parsed.height) && parsed.width >= 160 && parsed.width <= MAX_WIDGET_WIDTH && parsed.height >= 100 && parsed.height <= MAX_WIDGET_HEIGHT) {
       return { width: Math.round(parsed.width), height: Math.round(parsed.height) };
     }
   } catch (_) {}
