@@ -42,6 +42,15 @@ The preview updates whenever the character data changes.
 3. Write HTML + CSS in the creator notes field as normal
 4. The preview renders it live; select **Profile** for the character's Markdown definition
 
+### Text Size
+
+The bottom bar of the drawer tab and of the floating widget has **A−** / **A+** buttons (50%–300% in 10% steps) and a **Theme** checkbox.
+
+- The size is remembered **per character**. A character with no saved size starts at the Lumiverse theme font scale.
+- It applies to both tabs: the Creator Notes preview is zoomed as a whole (so px-sized text in creator HTML grows too), and the Profile text is scaled.
+- **Theme** (a single setting for all characters) makes every character follow the theme's font scale (`--lumiverse-font-scale`) and greys out the buttons; unticking it brings each character's saved size back. Theme scale changes are picked up within ~500 ms.
+- The drawer, floating widget, and desktop pop-out share the setting (localStorage) and stay in sync.
+
 ### Floating Widget
 
 Click **Float preview** in the drawer tab footer to pop the preview out as a **floating widget** — the same two tabs in a draggable overlay window.

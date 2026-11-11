@@ -9,6 +9,8 @@ export type PreviewState =
 export interface PreviewView {
   element: HTMLElement;
   render(state: PreviewState): void;
+  /** Re-renders the current HTML only when the scale actually changes. */
+  setFontScale(scale: number): void;
 }
 
 /** A preview surface: fills its container and renders sanitized creator notes
@@ -17,6 +19,8 @@ export function createPreviewView(): PreviewView {
   const element = document.createElement("div");
   element.style.cssText =
     "flex:1;width:100%;min-width:0;min-height:0;overflow:hidden;";
+  let fontScale = 1;
+  let current: PreviewState | null = null;
 
   function renderMessage(message: string, isError: boolean) {
     const el = document.createElement("p");
@@ -29,20 +33,28 @@ export function createPreviewView(): PreviewView {
     element.replaceChildren(el);
   }
 
+  function render(state: PreviewState) {
+    current = state;
+    if (state.kind !== "html") {
+      renderMessage(state.message, state.kind === "error");
+      return;
+    }
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("sandbox", "");
+    iframe.title = "Creator notes HTML preview";
+    iframe.style.cssText =
+      "display:block;width:100%;min-width:0;height:100%;border:none;background:transparent;";
+    iframe.srcdoc = buildPreviewDocument(sanitize(state.html), fontScale);
+    element.replaceChildren(iframe);
+  }
+
   return {
     element,
-    render(state) {
-      if (state.kind !== "html") {
-        renderMessage(state.message, state.kind === "error");
-        return;
-      }
-      const iframe = document.createElement("iframe");
-      iframe.setAttribute("sandbox", "");
-      iframe.title = "Creator notes HTML preview";
-      iframe.style.cssText =
-        "display:block;width:100%;min-width:0;height:100%;border:none;background:transparent;";
-      iframe.srcdoc = buildPreviewDocument(sanitize(state.html));
-      element.replaceChildren(iframe);
+    render,
+    setFontScale(scale) {
+      if (scale === fontScale) return;
+      fontScale = scale;
+      if (current?.kind === "html") render(current);
     },
   };
 }

@@ -604,7 +604,10 @@ function escAttr(s) {
 }
 
 // src/preview-document.ts
-function buildPreviewDocument(safeHtml) {
+function buildPreviewDocument(safeHtml, fontScale = 1) {
+  const scale = Number.isFinite(fontScale) && fontScale > 0 ? fontScale : 1;
+  const zoom = scale === 1 ? "" : `
+html { zoom: ${scale}; }`;
   return `<!DOCTYPE html><html><head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
@@ -629,7 +632,7 @@ audio, progress, meter { width: 100% !important; }
 table { width: 100% !important; table-layout: fixed !important; }
 th, td, pre, code, kbd, samp {
   white-space: pre-wrap !important; overflow-wrap: anywhere; word-break: break-word;
-}
+}${zoom}
 </style></head><body>${safeHtml}</body></html>`;
 }
 
@@ -637,6 +640,8 @@ th, td, pre, code, kbd, samp {
 function createPreviewView() {
   const element = document.createElement("div");
   element.style.cssText = "flex:1;width:100%;min-width:0;min-height:0;overflow:hidden;";
+  let fontScale = 1;
+  let current = null;
   function renderMessage(message, isError) {
     const el = document.createElement("p");
     el.style.cssText = "opacity:0.5;padding:12px;margin:0;";
@@ -647,19 +652,28 @@ function createPreviewView() {
     el.textContent = message;
     element.replaceChildren(el);
   }
+  function render(state) {
+    current = state;
+    if (state.kind !== "html") {
+      renderMessage(state.message, state.kind === "error");
+      return;
+    }
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("sandbox", "");
+    iframe.title = "Creator notes HTML preview";
+    iframe.style.cssText = "display:block;width:100%;min-width:0;height:100%;border:none;background:transparent;";
+    iframe.srcdoc = buildPreviewDocument(sanitize(state.html), fontScale);
+    element.replaceChildren(iframe);
+  }
   return {
     element,
-    render(state) {
-      if (state.kind !== "html") {
-        renderMessage(state.message, state.kind === "error");
+    render,
+    setFontScale(scale) {
+      if (scale === fontScale)
         return;
-      }
-      const iframe = document.createElement("iframe");
-      iframe.setAttribute("sandbox", "");
-      iframe.title = "Creator notes HTML preview";
-      iframe.style.cssText = "display:block;width:100%;min-width:0;height:100%;border:none;background:transparent;";
-      iframe.srcdoc = buildPreviewDocument(sanitize(state.html));
-      element.replaceChildren(iframe);
+      fontScale = scale;
+      if (current?.kind === "html")
+        render(current);
     }
   };
 }
@@ -4567,8 +4581,8 @@ var styles = `
 .cnhr-tabs button:hover { color:var(--lumiverse-text,#eceaf1);border-color:var(--lumiverse-primary-030,#777087); }
 .cnhr-view :is(button,summary):focus-visible { outline:2px solid var(--lumiverse-primary,#aca2c9);outline-offset:3px; }
 .cnhr-profile-panel { flex:1;min-height:0;min-width:0;overflow:hidden; }
-.cnhr-profile { box-sizing:border-box;width:100%;height:100%;overflow-y:auto;overflow-x:hidden;padding:8px 12px 24px;scrollbar-gutter:stable;font-size:calc(13px * var(--lumiverse-font-scale,1)); }
-.cnhr-character-name { font-size:calc(20px * var(--lumiverse-font-scale,1));line-height:1.3;margin:10px 0 18px;font-weight:700;overflow-wrap:anywhere; }
+.cnhr-profile { box-sizing:border-box;width:100%;height:100%;overflow-y:auto;overflow-x:hidden;padding:8px 12px 24px;scrollbar-gutter:stable;font-size:calc(13px * var(--cnhr-font-scale,var(--lumiverse-font-scale,1))); }
+.cnhr-character-name { font-size:calc(20px * var(--cnhr-font-scale,var(--lumiverse-font-scale,1)));line-height:1.3;margin:10px 0 18px;font-weight:700;overflow-wrap:anywhere; }
 .cnhr-section { margin:0 0 16px; }
 .cnhr-section > summary { display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--lumiverse-primary-010,rgba(128,128,128,.16));list-style:none;cursor:pointer;font-weight:600;color:var(--lumiverse-text,#e8e6ed); }
 .cnhr-section > summary::-webkit-details-marker,.cnhr-greeting > summary::-webkit-details-marker { display:none; }
@@ -4589,8 +4603,8 @@ var styles = `
 .cnhr-prose hr { border:0;border-top:1px solid var(--lumiverse-primary-015,rgba(128,128,128,.2)); }.cnhr-empty { font-style:italic;color:var(--lumiverse-text-dim,#85818e); }
 .cnhr-greetings { padding-top:10px; }.cnhr-greeting { margin-bottom:10px;border:1px solid var(--lumiverse-primary-015,rgba(128,128,128,.18));border-radius:8px;padding:12px; }
 .cnhr-greeting > summary { cursor:pointer;list-style:none; }.cnhr-greeting-label { display:block;font-weight:600;margin-bottom:6px; }.cnhr-greeting-preview { display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap;line-height:1.6;overflow-wrap:anywhere;color:var(--lumiverse-text-muted,#b4b1ba); }
-.cnhr-greeting-hint { display:block;margin-top:8px;font-size:11px;color:var(--lumiverse-primary-text,#c4b5e5); }.cnhr-greeting[open] .cnhr-greeting-preview,.cnhr-greeting[open] .cnhr-greeting-hint { display:none; }
-.cnhr-books { display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding-top:12px; }.cnhr-book-link { border:0;background:none;padding:3px 0;font:inherit;text-align:left;cursor:pointer;overflow-wrap:anywhere;max-width:100%; }.cnhr-book-link:disabled { opacity:.5;cursor:wait; }.cnhr-book-status { font-size:12px;line-height:1.5;color:var(--lumiverse-text-muted,#96929f);margin:0; }
+.cnhr-greeting-hint { display:block;margin-top:8px;font-size:.85em;color:var(--lumiverse-primary-text,#c4b5e5); }.cnhr-greeting[open] .cnhr-greeting-preview,.cnhr-greeting[open] .cnhr-greeting-hint { display:none; }
+.cnhr-books { display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding-top:12px; }.cnhr-book-link { border:0;background:none;padding:3px 0;font:inherit;text-align:left;cursor:pointer;overflow-wrap:anywhere;max-width:100%; }.cnhr-book-link:disabled { opacity:.5;cursor:wait; }.cnhr-book-status { font-size:.9em;line-height:1.5;color:var(--lumiverse-text-muted,#96929f);margin:0; }
 `;
 var viewId = 0;
 function createCharacterView(actions, storageKey) {
@@ -4675,6 +4689,12 @@ function createCharacterView(actions, storageKey) {
   select(initialTab);
   return {
     element,
+    setFontScale(scale) {
+      try {
+        element.style.setProperty("--cnhr-font-scale", String(scale));
+      } catch (_) {}
+      preview.setFontScale(scale);
+    },
     render(next) {
       state = next;
       if (state.kind === "character") {
@@ -4807,6 +4827,121 @@ function createProfileActions(context, mode = "main") {
         request.reject(new Error("The extension was reloaded. Please try again."));
       }
       pending.clear();
+    }
+  };
+}
+
+// src/font-scale.ts
+var STORAGE_PREFIX = "creator_notes_html_renderer:fontScale";
+var FOLLOW_THEME_KEY = `${STORAGE_PREFIX}:followTheme`;
+var FONT_SCALE_MIN = 0.5;
+var FONT_SCALE_MAX = 3;
+var FONT_SCALE_STEP = 0.1;
+function clampFontScale(scale) {
+  if (!Number.isFinite(scale))
+    return 1;
+  const rounded = Math.round(scale * 100) / 100;
+  return Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, rounded));
+}
+function readThemeFontScale() {
+  try {
+    if (typeof document === "undefined" || typeof getComputedStyle !== "function")
+      return 1;
+    for (const el of [document.documentElement, document.body]) {
+      if (!el)
+        continue;
+      const raw = getComputedStyle(el).getPropertyValue("--lumiverse-font-scale").trim();
+      const value = Number.parseFloat(raw);
+      if (Number.isFinite(value) && value > 0)
+        return value;
+    }
+  } catch (_) {}
+  return 1;
+}
+function storageGet(key) {
+  try {
+    return typeof localStorage === "undefined" ? null : localStorage.getItem(key);
+  } catch (_) {
+    return null;
+  }
+}
+function storageSet(key, value) {
+  try {
+    if (typeof localStorage !== "undefined")
+      localStorage.setItem(key, value);
+  } catch (_) {}
+}
+function readFollowTheme() {
+  return storageGet(FOLLOW_THEME_KEY) === "1";
+}
+function writeFollowTheme(follow) {
+  storageSet(FOLLOW_THEME_KEY, follow ? "1" : "0");
+}
+function readCharacterFontScale(characterId) {
+  const value = Number.parseFloat(storageGet(`${STORAGE_PREFIX}:char:${characterId}`) ?? "");
+  return Number.isFinite(value) ? clampFontScale(value) : null;
+}
+function writeCharacterFontScale(characterId, scale) {
+  storageSet(`${STORAGE_PREFIX}:char:${characterId}`, String(clampFontScale(scale)));
+}
+function resolveFontScale(characterId) {
+  const theme = clampFontScale(readThemeFontScale());
+  const followTheme = readFollowTheme();
+  if (followTheme || !characterId) {
+    return { scale: theme, followTheme, adjustable: !followTheme && !!characterId };
+  }
+  return { scale: readCharacterFontScale(characterId) ?? theme, followTheme, adjustable: true };
+}
+var CONTROL_BUTTON_CSS = "min-width:26px;padding:2px 6px;font-size:12px;font-family:inherit;line-height:1.2;border:1px solid rgba(128,128,128,0.35);border-radius:4px;background:transparent;color:inherit;opacity:0.7;cursor:pointer;";
+function createFontControls(handlers) {
+  const element = document.createElement("div");
+  element.style.cssText = "display:inline-flex;align-items:center;gap:4px;font-size:12px;";
+  const decrease = document.createElement("button");
+  decrease.type = "button";
+  decrease.textContent = "A−";
+  decrease.title = "Decrease text size for this character";
+  decrease.setAttribute("aria-label", "Decrease text size");
+  decrease.style.cssText = CONTROL_BUTTON_CSS;
+  decrease.addEventListener("click", () => handlers.step(-FONT_SCALE_STEP));
+  const value = document.createElement("span");
+  value.style.cssText = "min-width:38px;text-align:center;opacity:0.6;font-variant-numeric:tabular-nums;";
+  value.setAttribute("aria-live", "polite");
+  const increase = document.createElement("button");
+  increase.type = "button";
+  increase.textContent = "A+";
+  increase.title = "Increase text size for this character";
+  increase.setAttribute("aria-label", "Increase text size");
+  increase.style.cssText = CONTROL_BUTTON_CSS;
+  increase.addEventListener("click", () => handlers.step(FONT_SCALE_STEP));
+  const followLabel = document.createElement("label");
+  followLabel.title = "Use the Lumiverse theme font scale for every character";
+  followLabel.style.cssText = "display:inline-flex;align-items:center;gap:3px;margin-left:4px;opacity:0.7;cursor:pointer;white-space:nowrap;";
+  const follow = document.createElement("input");
+  follow.type = "checkbox";
+  follow.setAttribute("aria-label", "Follow theme font scale");
+  follow.style.cssText = "margin:0;cursor:pointer;";
+  follow.addEventListener("change", () => handlers.setFollowTheme(follow.checked));
+  const followText = document.createElement("span");
+  followText.textContent = "Theme";
+  followLabel.appendChild(follow);
+  followLabel.appendChild(followText);
+  element.appendChild(decrease);
+  element.appendChild(value);
+  element.appendChild(increase);
+  element.appendChild(followLabel);
+  return {
+    element,
+    update(state) {
+      value.textContent = `${Math.round(state.scale * 100)}%`;
+      follow.checked = state.followTheme;
+      const atMin = state.scale <= FONT_SCALE_MIN + 0.000000001;
+      const atMax = state.scale >= FONT_SCALE_MAX - 0.000000001;
+      decrease.disabled = !state.adjustable || atMin;
+      increase.disabled = !state.adjustable || atMax;
+      for (const button of [decrease, increase]) {
+        button.style.opacity = button.disabled ? "0.3" : "0.7";
+        button.style.cursor = button.disabled ? "default" : "pointer";
+      }
     }
   };
 }
@@ -4965,8 +5100,44 @@ function setup(ctx) {
   }
   function broadcast(state) {
     latestState = state;
+    refreshFontScale(true);
     for (const listener of listeners)
       listener(state);
+  }
+  let fontState = resolveFontScale(null);
+  let drawerFontControls = null;
+  let floatFontControls = null;
+  let drawerView = null;
+  let floatView = null;
+  function displayedCharacterId() {
+    return latestState?.kind === "character" ? latestState.character.id ?? null : null;
+  }
+  function refreshFontScale(force = false) {
+    const next = resolveFontScale(displayedCharacterId());
+    if (!force && next.scale === fontState.scale && next.followTheme === fontState.followTheme && next.adjustable === fontState.adjustable)
+      return;
+    fontState = next;
+    drawerView?.setFontScale(next.scale);
+    floatView?.setFontScale(next.scale);
+    drawerFontControls?.update(next);
+    floatFontControls?.update(next);
+  }
+  function makeFontControls() {
+    const controls = createFontControls({
+      step(delta) {
+        const characterId = displayedCharacterId();
+        if (!characterId || fontState.followTheme)
+          return;
+        writeCharacterFontScale(characterId, fontState.scale + delta);
+        refreshFontScale(true);
+      },
+      setFollowTheme(follow) {
+        writeFollowTheme(follow);
+        refreshFontScale(true);
+      }
+    });
+    controls.update(fontState);
+    return controls;
   }
   function resolveActiveCharacterId() {
     const characterId = ctx.getActiveChat().characterId ?? null;
@@ -5009,7 +5180,6 @@ function setup(ctx) {
     }
   }
   const teardownSteps = [];
-  let drawerView = null;
   let unsubDrawerView = null;
   let unsubActivate = null;
   let runtimeExtensionId = getRuntimeExtensionId();
@@ -5026,7 +5196,7 @@ function setup(ctx) {
     const root = tab.root;
     root.style.cssText = "display:flex;flex-direction:column;width:100%;min-width:0;min-height:0;height:100%;";
     const toolbar = document.createElement("div");
-    toolbar.style.cssText = "display:flex;align-items:center;gap:8px;padding:6px 8px;flex:0 0 auto;border-bottom:1px solid rgba(128,128,128,0.25);";
+    toolbar.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:6px 8px;flex:0 0 auto;border-bottom:1px solid rgba(128,128,128,0.25);";
     const toolbarLabel = document.createElement("span");
     toolbarLabel.textContent = "Character";
     toolbarLabel.style.cssText = "font-size:12px;opacity:0.6;";
@@ -5034,6 +5204,8 @@ function setup(ctx) {
     const toolbarSpacer = document.createElement("span");
     toolbarSpacer.style.flex = "1";
     toolbar.appendChild(toolbarSpacer);
+    drawerFontControls = makeFontControls();
+    toolbar.appendChild(drawerFontControls.element);
     const floatButton = document.createElement("button");
     floatButton.type = "button";
     floatButton.textContent = "Float preview";
@@ -5042,6 +5214,7 @@ function setup(ctx) {
     floatButton.addEventListener("click", () => openFloatWidget());
     toolbar.appendChild(floatButton);
     drawerView = createCharacterView(profileActions, `${EXTENSION_ID}:drawerTab`);
+    drawerView.setFontScale(fontState.scale);
     root.appendChild(drawerView.element);
     root.appendChild(toolbar);
     unsubDrawerView = subscribe(drawerView.render);
@@ -5060,9 +5233,10 @@ function setup(ctx) {
     if (!disposed && resolveActiveCharacterId() !== observedCharacterId) {
       loadCharacter();
     }
+    if (!disposed)
+      refreshFontScale();
   }, 500);
   let floatHandle = null;
-  let floatView = null;
   let unsubFloatView = null;
   let unsubDesktopReturned = null;
   let floatResizeObserver = null;
@@ -5160,6 +5334,7 @@ function setup(ctx) {
       wroot.appendChild(header);
     }
     floatView = createCharacterView(profileActions, `${EXTENSION_ID}:floatTab`);
+    floatView.setFontScale(fontState.scale);
     wroot.appendChild(floatView.element);
     if (latestState)
       floatView.render(latestState);
@@ -5207,6 +5382,12 @@ function setup(ctx) {
           applySize();
       });
     }
+    sizeStrip.style.flexWrap = "wrap";
+    const fontSpacer = document.createElement("span");
+    fontSpacer.style.flex = "1";
+    sizeStrip.appendChild(fontSpacer);
+    floatFontControls = makeFontControls();
+    sizeStrip.appendChild(floatFontControls.element);
     wroot.appendChild(sizeStrip);
     watchFloatRootHeight(wroot);
     if (typeof ResizeObserver !== "undefined") {
@@ -5253,6 +5434,7 @@ function setup(ctx) {
     unsubDesktopReturned = null;
     stopFloatRootHeightWatch();
     floatView = null;
+    floatFontControls = null;
     if (floatHandle) {
       try {
         floatHandle.destroy();
