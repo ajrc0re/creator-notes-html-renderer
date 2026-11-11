@@ -163,10 +163,18 @@ const PERSIST_GEOMETRY_KEY = "html-preview";
  *  committed), and the desktop pop-out re-seeds every newly created widget to
  *  its size-at-open — so we track resizes ourselves and restore on creation. */
 const FLOAT_SIZE_STORAGE_KEY = `${EXTENSION_ID}:floatSize`;
+/** Desktop pop-outs keep their own size: a pop-out sized for a large monitor
+ *  must not carry over to the in-page widget when it is returned. */
+const POPOUT_FLOAT_SIZE_STORAGE_KEY = `${EXTENSION_ID}:popoutFloatSize`;
 
-function readPersistedFloatSize(fallback: { width: number; height: number }): { width: number; height: number } {
+/** After a return from a pop-out, the host remounts the in-page widget at the
+ *  pop-out's size for a moment; ignore those observations while the page size
+ *  is restored. */
+const PAGE_SIZE_RESTORE_GRACE_MS = 1000;
+
+function readPersistedFloatSize(key: string, fallback: { width: number; height: number }): { width: number; height: number } {
   try {
-    const raw = typeof localStorage === "undefined" ? null : localStorage.getItem(FLOAT_SIZE_STORAGE_KEY);
+    const raw = typeof localStorage === "undefined" ? null : localStorage.getItem(key);
     const parsed = raw ? JSON.parse(raw) : null;
     if (
       parsed && typeof parsed === "object" &&
@@ -180,9 +188,9 @@ function readPersistedFloatSize(fallback: { width: number; height: number }): { 
   return fallback;
 }
 
-function writePersistedFloatSize(size: { width: number; height: number }) {
+function writePersistedFloatSize(key: string, size: { width: number; height: number }) {
   try {
-    if (typeof localStorage !== "undefined") localStorage.setItem(FLOAT_SIZE_STORAGE_KEY, JSON.stringify(size));
+    if (typeof localStorage !== "undefined") localStorage.setItem(key, JSON.stringify(size));
   } catch (_) {}
 }
 
@@ -433,7 +441,9 @@ export function setup(ctx: SpindleFrontendContext) {
   let floatRootObserver: ResizeObserver | null = null;
   let floatHeightTimer: ReturnType<typeof setTimeout> | null = null;
   let stopWindowResizeWatch: (() => void) | null = null;
-  let floatSize = readPersistedFloatSize(desktopWidget ?? { width: 420, height: 560 });
+  const floatSizeKey = isWidgetWindow ? POPOUT_FLOAT_SIZE_STORAGE_KEY : FLOAT_SIZE_STORAGE_KEY;
+  let floatSize = readPersistedFloatSize(floatSizeKey, desktopWidget ?? { width: 420, height: 560 });
+  let pageSizeRestoreDeadline = 0;
 
   /** Some hosts size the widget's container with min-height only (the desktop
    *  pop-out uses `minHeight: calc(100vh - 30px)`), which breaks height:100%
@@ -604,7 +614,7 @@ export function setup(ctx: SpindleFrontendContext) {
       widthInput.value = String(width);
       heightInput.value = String(height);
       floatSize = { width, height };
-      writePersistedFloatSize(floatSize);
+      writePersistedFloatSize(floatSizeKey, floatSize);
       try { handle.setSize(width, height); } catch (_) {
         // Stale handle (e.g. ui_panels revoked) — nothing to do.
       }
@@ -641,9 +651,11 @@ export function setup(ctx: SpindleFrontendContext) {
         syncFloatRootHeight(wroot);
         const width = Math.round(wroot.clientWidth);
         const height = Math.round(wroot.clientHeight);
-        if (width > 0 && height > 0 && (width !== floatSize.width || height !== floatSize.height)) {
+        const restoringPageSize = Date.now() < pageSizeRestoreDeadline;
+        if (restoringPageSize && width === floatSize.width && height === floatSize.height) pageSizeRestoreDeadline = 0;
+        if (!restoringPageSize && width > 0 && height > 0 && (width !== floatSize.width || height !== floatSize.height)) {
           floatSize = { width, height };
-          writePersistedFloatSize(floatSize);
+          writePersistedFloatSize(floatSizeKey, floatSize);
         }
         if (typeof document !== "undefined" && document.activeElement !== widthInput) {
           widthInput.value = String(floatSize.width);
@@ -664,8 +676,11 @@ export function setup(ctx: SpindleFrontendContext) {
       // detail.extensionId is the runtime UUID, not the manifest identifier.
       if (typeof detail.extensionId === "string" && runtimeExtensionId && detail.extensionId !== runtimeExtensionId) return;
       if (floatHandle !== handle) return;
-      // The widget root was remounted on return from a native pop-out window:
-      // rebuild the content, then pull fresh state from the backend.
+      // The widget root was remounted on return from a native pop-out window,
+      // sized like the pop-out: restore the page's own size, rebuild the
+      // content, then pull fresh state from the backend.
+      pageSizeRestoreDeadline = Date.now() + PAGE_SIZE_RESTORE_GRACE_MS;
+      try { handle.setSize(floatSize.width, floatSize.height); } catch (_) {}
       mountFloatContent(handle);
       void loadCharacter();
     };

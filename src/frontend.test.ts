@@ -204,6 +204,7 @@ test("float widget renders the preview, survives a desktop pop-out return, and c
   const win = installWindowStub();
   const storage = installLocalStorageStub();
   const interval = installIntervalStub();
+  const ro = installResizeObserverStub();
   let characterId: string | null = "a";
   const events: Record<string, () => void> = {};
   const reads: string[] = [];
@@ -211,12 +212,15 @@ test("float widget renders the preview, survives a desktop pop-out return, and c
   let destroyCount = 0;
   const sizes: [number, number][] = [];
   const createdOptions: Record<string, number | boolean | string>[] = [];
+  let widgetRoot: any;
 
   const makeHandle = (options: Record<string, unknown>) => {
     created++;
     createdOptions.push(options as any);
+    const base = makeFloatWidgetHandle();
+    widgetRoot = base.root;
     return {
-      ...makeFloatWidgetHandle(),
+      ...base,
       setSize(width: number, height: number) { sizes.push([width, height]); },
       destroy() { destroyCount++; },
     };
@@ -251,6 +255,23 @@ test("float widget renders the preview, survives a desktop pop-out return, and c
     returned!({ detail: { widgetId: "w1", extensionId: "runtime-uuid-test" } });
     await flush();
     expect(reads).toEqual(["a", "a"]); // fresh read after remount
+    // The returned in-page widget gets its own (page) size back, not the
+    // pop-out's.
+    expect(sizes).toEqual([[420, 560]]);
+    sizes.length = 0;
+    // Until the page size is back, the remounted root still measures at the
+    // pop-out's size; that must not replace the page size.
+    widgetRoot.clientWidth = 1720;
+    widgetRoot.clientHeight = 1362;
+    ro.fire(widgetRoot);
+    expect(storage.get("creator_notes_html_renderer:floatSize")).toBeNull();
+    widgetRoot.clientWidth = 420;
+    widgetRoot.clientHeight = 560;
+    ro.fire(widgetRoot); // page size restored: tracking resumes
+    widgetRoot.clientWidth = 450;
+    widgetRoot.clientHeight = 580;
+    ro.fire(widgetRoot);
+    expect(storage.get("creator_notes_html_renderer:floatSize")).toBe('{"width":450,"height":580}');
     expect(dom.frames.length).toBeGreaterThanOrEqual(4); // rebuilt widget + broadcast refresh
     expect(dom.frames[dom.frames.length - 1].srcdoc).toContain("bold notes");
 
@@ -331,6 +352,7 @@ test("float widget renders the preview, survives a desktop pop-out return, and c
     expect(interval.cleared).toBe(true);
   } finally {
     cleanup?.();
+    ro.restore();
     interval.restore();
     storage.restore();
     win.restore();
@@ -450,7 +472,8 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     // tab, and the active character resolves through the mirror. A previously
     // persisted size wins over the URL's size-at-open, and a post-creation
     // setSize re-asserts it over the host's URL seeding.
-    storage.seed("creator_notes_html_renderer:floatSize", JSON.stringify({ width: 600, height: 700 }));
+    storage.seed("creator_notes_html_renderer:floatSize", JSON.stringify({ width: 300, height: 300 }));
+    storage.seed("creator_notes_html_renderer:popoutFloatSize", JSON.stringify({ width: 600, height: 700 }));
     win = installWindowStub(
       "?desktopWidgetExtension=runtime-uuid-live&desktopWidgetIndex=0" +
       "&desktopWidgetTitle=Creator%20Notes%20HTML%20Renderer&desktopWidgetWidth=500&desktopWidgetHeight=400",
@@ -518,7 +541,9 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     (roots[0] as any).clientHeight = 520;
     ro.fire(roots[0]);
     expect(inputs().map((n) => n.value)).toEqual(["640", "520"]);
-    expect(storage.get("creator_notes_html_renderer:floatSize")).toBe('{"width":640,"height":520}');
+    expect(storage.get("creator_notes_html_renderer:popoutFloatSize")).toBe('{"width":640,"height":520}');
+    // Pop-out sizes never touch the in-page widget's size.
+    expect(storage.get("creator_notes_html_renderer:floatSize")).toBe('{"width":300,"height":300}');
 
     // Size strip uses the desktop pop-out clamps (160–7680 × 100–4320), so
     // large sizes like 1720×1362 go through untouched.
