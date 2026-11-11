@@ -5068,15 +5068,34 @@ function setup(ctx) {
   let floatResizeObserver = null;
   let floatRootObserver = null;
   let floatHeightTimer = null;
+  let stopWindowResizeWatch = null;
   let floatSize = readPersistedFloatSize(desktopWidget ?? { width: 420, height: 560 });
   function syncFloatRootHeight(wroot) {
     const parent = wroot.parentElement;
-    const available = parent && typeof parent.clientHeight === "number" && parent.clientHeight > 0 ? parent.clientHeight : 0;
+    let available = parent && typeof parent.clientHeight === "number" && parent.clientHeight > 0 ? parent.clientHeight : 0;
+    if (isWidgetWindow && parent) {
+      const viewportCap = viewportSpaceBelow(parent);
+      if (viewportCap > 0 && (available <= 0 || viewportCap < available))
+        available = viewportCap;
+    }
     wroot.style.height = available > 0 ? `${available}px` : "100%";
+  }
+  function viewportSpaceBelow(el) {
+    try {
+      const viewportHeight = typeof window !== "undefined" ? Number(window.innerHeight) : NaN;
+      if (!Number.isFinite(viewportHeight) || viewportHeight <= 0)
+        return 0;
+      const top = typeof el.getBoundingClientRect === "function" ? el.getBoundingClientRect().top : 0;
+      return Math.floor(viewportHeight - Math.max(0, Number.isFinite(top) ? top : 0));
+    } catch (_) {
+      return 0;
+    }
   }
   function stopFloatRootHeightWatch() {
     floatResizeObserver?.disconnect();
     floatResizeObserver = null;
+    stopWindowResizeWatch?.();
+    stopWindowResizeWatch = null;
     floatRootObserver?.disconnect();
     floatRootObserver = null;
     if (floatHeightTimer !== null) {
@@ -5094,6 +5113,11 @@ function setup(ctx) {
       if (typeof ResizeObserver !== "undefined") {
         floatResizeObserver = new ResizeObserver(() => syncFloatRootHeight(wroot));
         floatResizeObserver.observe(parent);
+      }
+      if (isWidgetWindow && typeof window !== "undefined" && typeof window.addEventListener === "function") {
+        const onResize = () => syncFloatRootHeight(wroot);
+        window.addEventListener("resize", onResize);
+        stopWindowResizeWatch = () => window.removeEventListener("resize", onResize);
       }
       return true;
     };

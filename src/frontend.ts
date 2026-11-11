@@ -357,6 +357,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let floatResizeObserver: ResizeObserver | null = null;
   let floatRootObserver: ResizeObserver | null = null;
   let floatHeightTimer: ReturnType<typeof setTimeout> | null = null;
+  let stopWindowResizeWatch: (() => void) | null = null;
   let floatSize = readPersistedFloatSize(desktopWidget ?? { width: 420, height: 560 });
 
   /** Some hosts size the widget's container with min-height only (the desktop
@@ -366,15 +367,37 @@ export function setup(ctx: SpindleFrontendContext) {
    *  sync as the widget/window resizes. */
   function syncFloatRootHeight(wroot: HTMLElement) {
     const parent = wroot.parentElement;
-    const available = parent && typeof parent.clientHeight === "number" && parent.clientHeight > 0
+    let available = parent && typeof parent.clientHeight === "number" && parent.clientHeight > 0
       ? parent.clientHeight
       : 0;
+    // A min-height-only container grows to fit our explicit pixel height, so
+    // once the window has been taller its clientHeight never drops back: the
+    // measurement ratchets upward and the size strip ends up below the fold
+    // after the window shrinks. In a pop-out the widget fills the native
+    // window, so cap the height at the viewport space below the container.
+    if (isWidgetWindow && parent) {
+      const viewportCap = viewportSpaceBelow(parent);
+      if (viewportCap > 0 && (available <= 0 || viewportCap < available)) available = viewportCap;
+    }
     wroot.style.height = available > 0 ? `${available}px` : "100%";
+  }
+
+  function viewportSpaceBelow(el: HTMLElement): number {
+    try {
+      const viewportHeight = typeof window !== "undefined" ? Number(window.innerHeight) : NaN;
+      if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return 0;
+      const top = typeof el.getBoundingClientRect === "function" ? el.getBoundingClientRect().top : 0;
+      return Math.floor(viewportHeight - Math.max(0, Number.isFinite(top) ? top : 0));
+    } catch (_) {
+      return 0;
+    }
   }
 
   function stopFloatRootHeightWatch() {
     floatResizeObserver?.disconnect();
     floatResizeObserver = null;
+    stopWindowResizeWatch?.();
+    stopWindowResizeWatch = null;
     floatRootObserver?.disconnect();
     floatRootObserver = null;
     if (floatHeightTimer !== null) {
@@ -392,6 +415,14 @@ export function setup(ctx: SpindleFrontendContext) {
       if (typeof ResizeObserver !== "undefined") {
         floatResizeObserver = new ResizeObserver(() => syncFloatRootHeight(wroot));
         floatResizeObserver.observe(parent);
+      }
+      // Shrinking the pop-out window does not resize a min-height container
+      // that our own height is holding open, so the observers above never
+      // fire; follow the window itself too.
+      if (isWidgetWindow && typeof window !== "undefined" && typeof window.addEventListener === "function") {
+        const onResize = () => syncFloatRootHeight(wroot);
+        window.addEventListener("resize", onResize);
+        stopWindowResizeWatch = () => window.removeEventListener("resize", onResize);
       }
       return true;
     };

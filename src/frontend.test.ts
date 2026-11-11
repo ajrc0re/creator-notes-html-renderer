@@ -461,6 +461,22 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     // The layout guard gives the root an explicit pixel height from the host
     // container instead of an unresolvable height:100% chain.
     expect(roots[0].style.height).toBe("480px");
+    // Shrinking the native window: the min-height host container is held
+    // open by our own pixel height (clientHeight stays 480), so the height
+    // must follow the viewport instead or the size strip falls off-screen.
+    const parentStub = (roots[0] as any).parentElement;
+    parentStub.getBoundingClientRect = () => ({ top: 30 });
+    (globalThis as any).window.innerHeight = 430;
+    win.listeners.resize!({});
+    expect(roots[0].style.height).toBe("400px");
+    // Growing again follows the container once it reports the new space.
+    (globalThis as any).window.innerHeight = 1030;
+    parentStub.clientHeight = 1000;
+    win.listeners.resize!({});
+    expect(roots[0].style.height).toBe("1000px");
+    (globalThis as any).window.innerHeight = 930;
+    win.listeners.resize!({});
+    expect(roots[0].style.height).toBe("900px");
     await flush();
     expect(dom.frames).toHaveLength(drawerPhaseFrames + 1);
     expect(dom.frames[dom.frames.length - 1].srcdoc).toContain("notes for a");
