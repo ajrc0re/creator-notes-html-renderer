@@ -186,6 +186,8 @@ function clampInt(raw: string, fallback: number, min: number, max: number): numb
 
 const ICON_EXPAND =
   '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
+const ICON_SCROLL_TOP =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
 const ICON_CLOSE =
   '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 
@@ -197,6 +199,13 @@ function iconButton(svg: string, label: string): HTMLButtonElement {
   button.innerHTML = svg;
   button.style.cssText =
     "display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:none;border-radius:4px;background:transparent;color:inherit;opacity:0.6;cursor:pointer;";
+  return button;
+}
+
+function scrollTopButton(view: { scrollToTop(): void }): HTMLButtonElement {
+  const button = iconButton(ICON_SCROLL_TOP, "Scroll to top");
+  button.style.marginLeft = "auto";
+  button.addEventListener("click", () => view.scrollToTop());
   return button;
 }
 
@@ -325,6 +334,7 @@ export function setup(ctx: SpindleFrontendContext) {
     toolbar.appendChild(floatButton);
 
     drawerView = createCharacterView(profileActions, `${EXTENSION_ID}:drawerTab`);
+    toolbar.appendChild(scrollTopButton(drawerView));
     root.appendChild(drawerView.element);
     root.appendChild(toolbar);
     unsubDrawerView = subscribe(drawerView.render);
@@ -547,6 +557,7 @@ export function setup(ctx: SpindleFrontendContext) {
       });
     }
 
+    sizeStrip.appendChild(scrollTopButton(floatView));
     wroot.appendChild(sizeStrip);
     watchFloatRootHeight(wroot);
 
