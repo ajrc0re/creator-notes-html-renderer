@@ -495,7 +495,15 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     const titles = widgetButtons.map((b) => b.title);
     expect(titles).not.toContain("Close preview widget");
     expect(titles).not.toContain("Toggle fullscreen");
-    expect(widgetButtons.map((b) => b.textContent)).toEqual(["Creator Notes", "Profile", "Apply"]);
+    expect(widgetButtons.map((b) => b.textContent)).toEqual(["Creator Notes", "Profile", "Apply", ""]);
+    expect(titles[titles.length - 1]).toBe("Scroll to top");
+
+    // Scroll to top re-renders the sandboxed notes iframe (its document is
+    // unreachable from here), which starts it back at the top.
+    const framesBefore = dom.frames.length;
+    widgetButtons[widgetButtons.length - 1].handlers.click();
+    expect(dom.frames).toHaveLength(framesBefore + 1);
+    expect(dom.frames[dom.frames.length - 1].srcdoc).toContain("notes for b");
 
     // The strip starts at the persisted size; a host-driven resize (native
     // window edges) is tracked live, persisted, and reflected in the inputs.

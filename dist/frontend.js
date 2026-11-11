@@ -647,19 +647,26 @@ function createPreviewView() {
     el.textContent = message;
     element.replaceChildren(el);
   }
+  let current = null;
+  function render(state) {
+    current = state;
+    if (state.kind !== "html") {
+      renderMessage(state.message, state.kind === "error");
+      return;
+    }
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("sandbox", "");
+    iframe.title = "Creator notes HTML preview";
+    iframe.style.cssText = "display:block;width:100%;min-width:0;height:100%;border:none;background:transparent;";
+    iframe.srcdoc = buildPreviewDocument(sanitize(state.html));
+    element.replaceChildren(iframe);
+  }
   return {
     element,
-    render(state) {
-      if (state.kind !== "html") {
-        renderMessage(state.message, state.kind === "error");
-        return;
-      }
-      const iframe = document.createElement("iframe");
-      iframe.setAttribute("sandbox", "");
-      iframe.title = "Creator notes HTML preview";
-      iframe.style.cssText = "display:block;width:100%;min-width:0;height:100%;border:none;background:transparent;";
-      iframe.srcdoc = buildPreviewDocument(sanitize(state.html));
-      element.replaceChildren(iframe);
+    render,
+    scrollToTop() {
+      if (current?.kind === "html")
+        render(current);
     }
   };
 }
@@ -4689,6 +4696,12 @@ function createCharacterView(actions, storageKey) {
         profile.clear();
         profileCharacter = null;
       }
+    },
+    scrollToTop() {
+      if (selected === 0)
+        preview.scrollToTop();
+      else
+        profile.element.scrollTop = 0;
     }
   };
 }
@@ -4927,6 +4940,7 @@ function clampInt(raw, fallback, min, max) {
   return Math.min(max, Math.max(min, parsed));
 }
 var ICON_EXPAND = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
+var ICON_SCROLL_TOP = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
 var ICON_CLOSE = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 function iconButton(svg, label) {
   const button = document.createElement("button");
@@ -4935,6 +4949,12 @@ function iconButton(svg, label) {
   button.setAttribute("aria-label", label);
   button.innerHTML = svg;
   button.style.cssText = "display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:none;border-radius:4px;background:transparent;color:inherit;opacity:0.6;cursor:pointer;";
+  return button;
+}
+function scrollTopButton(view) {
+  const button = iconButton(ICON_SCROLL_TOP, "Scroll to top");
+  button.style.marginLeft = "auto";
+  button.addEventListener("click", () => view.scrollToTop());
   return button;
 }
 function configureSizeInput(input, label, value, min, max) {
@@ -5042,6 +5062,7 @@ function setup(ctx) {
     floatButton.addEventListener("click", () => openFloatWidget());
     toolbar.appendChild(floatButton);
     drawerView = createCharacterView(profileActions, `${EXTENSION_ID}:drawerTab`);
+    toolbar.appendChild(scrollTopButton(drawerView));
     root.appendChild(drawerView.element);
     root.appendChild(toolbar);
     unsubDrawerView = subscribe(drawerView.render);
@@ -5207,6 +5228,7 @@ function setup(ctx) {
           applySize();
       });
     }
+    sizeStrip.appendChild(scrollTopButton(floatView));
     wroot.appendChild(sizeStrip);
     watchFloatRootHeight(wroot);
     if (typeof ResizeObserver !== "undefined") {

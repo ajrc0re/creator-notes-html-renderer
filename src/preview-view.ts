@@ -9,6 +9,8 @@ export type PreviewState =
 export interface PreviewView {
   element: HTMLElement;
   render(state: PreviewState): void;
+  /** Return the rendered notes to the top. */
+  scrollToTop(): void;
 }
 
 /** A preview surface: fills its container and renders sanitized creator notes
@@ -29,20 +31,30 @@ export function createPreviewView(): PreviewView {
     element.replaceChildren(el);
   }
 
+  let current: PreviewState | null = null;
+
+  function render(state: PreviewState) {
+    current = state;
+    if (state.kind !== "html") {
+      renderMessage(state.message, state.kind === "error");
+      return;
+    }
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("sandbox", "");
+    iframe.title = "Creator notes HTML preview";
+    iframe.style.cssText =
+      "display:block;width:100%;min-width:0;height:100%;border:none;background:transparent;";
+    iframe.srcdoc = buildPreviewDocument(sanitize(state.html));
+    element.replaceChildren(iframe);
+  }
+
   return {
     element,
-    render(state) {
-      if (state.kind !== "html") {
-        renderMessage(state.message, state.kind === "error");
-        return;
-      }
-      const iframe = document.createElement("iframe");
-      iframe.setAttribute("sandbox", "");
-      iframe.title = "Creator notes HTML preview";
-      iframe.style.cssText =
-        "display:block;width:100%;min-width:0;height:100%;border:none;background:transparent;";
-      iframe.srcdoc = buildPreviewDocument(sanitize(state.html));
-      element.replaceChildren(iframe);
+    render,
+    // The iframe is fully sandboxed (opaque origin), so its document can't be
+    // scrolled from here; re-rendering it starts the notes back at the top.
+    scrollToTop() {
+      if (current?.kind === "html") render(current);
     },
   };
 }
