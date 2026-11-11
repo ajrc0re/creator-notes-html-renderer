@@ -128,16 +128,22 @@ interface SizeClamps {
   maxHeight: number;
 }
 
-/** Browser-mode clamps; the host clamps oversized widgets to the viewport on
- *  mobile anyway, these just keep the inputs sane. */
+/** Upper bound for the size strip and the persisted size. It is only a
+ *  sanity limit (8K), not a layout constraint: the host does its own clamping
+ *  (to the viewport in-page; Lumiverse Desktop currently caps pop-out setSize
+ *  at 1200×900 in DesktopFloatingWidgetHost / frontend.rs, while native edge
+ *  drags are uncapped), so the extension should never be the tighter limit. */
+const MAX_WIDGET_WIDTH = 7680;
+const MAX_WIDGET_HEIGHT = 4320;
+
+/** Browser-mode clamps; the host clamps oversized widgets to the viewport. */
 const BROWSER_SIZE_CLAMPS: SizeClamps = {
-  minWidth: 220, minHeight: 150, maxWidth: 1920, maxHeight: 1200,
+  minWidth: 220, minHeight: 150, maxWidth: MAX_WIDGET_WIDTH, maxHeight: MAX_WIDGET_HEIGHT,
 };
 
-/** Desktop pop-out windows resize via setSize and are clamped by Lumiverse
- *  Desktop to these bounds (see DesktopFloatingWidgetHost). */
+/** Desktop pop-out minimums match Lumiverse Desktop's chromed-widget minimum. */
 const DESKTOP_SIZE_CLAMPS: SizeClamps = {
-  minWidth: 160, minHeight: 100, maxWidth: 1200, maxHeight: 900,
+  minWidth: 160, minHeight: 100, maxWidth: MAX_WIDGET_WIDTH, maxHeight: MAX_WIDGET_HEIGHT,
 };
 
 /** Host-side geometry persistence is opt-in per placement (persistGeometry);
@@ -157,8 +163,8 @@ function readPersistedFloatSize(fallback: { width: number; height: number }): { 
     if (
       parsed && typeof parsed === "object" &&
       Number.isFinite(parsed.width) && Number.isFinite(parsed.height) &&
-      parsed.width >= 160 && parsed.width <= 1920 &&
-      parsed.height >= 100 && parsed.height <= 1200
+      parsed.width >= 160 && parsed.width <= MAX_WIDGET_WIDTH &&
+      parsed.height >= 100 && parsed.height <= MAX_WIDGET_HEIGHT
     ) {
       return { width: Math.round(parsed.width), height: Math.round(parsed.height) };
     }
