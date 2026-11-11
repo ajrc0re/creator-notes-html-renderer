@@ -5051,9 +5051,11 @@ var DESKTOP_SIZE_CLAMPS = {
 };
 var PERSIST_GEOMETRY_KEY = "html-preview";
 var FLOAT_SIZE_STORAGE_KEY = `${EXTENSION_ID}:floatSize`;
-function readPersistedFloatSize(fallback) {
+var POPOUT_FLOAT_SIZE_STORAGE_KEY = `${EXTENSION_ID}:popoutFloatSize`;
+var PAGE_SIZE_RESTORE_GRACE_MS = 1000;
+function readPersistedFloatSize(key, fallback) {
   try {
-    const raw = typeof localStorage === "undefined" ? null : localStorage.getItem(FLOAT_SIZE_STORAGE_KEY);
+    const raw = typeof localStorage === "undefined" ? null : localStorage.getItem(key);
     const parsed = raw ? JSON.parse(raw) : null;
     if (parsed && typeof parsed === "object" && Number.isFinite(parsed.width) && Number.isFinite(parsed.height) && parsed.width >= 160 && parsed.width <= MAX_WIDGET_WIDTH && parsed.height >= 100 && parsed.height <= MAX_WIDGET_HEIGHT) {
       return { width: Math.round(parsed.width), height: Math.round(parsed.height) };
@@ -5061,10 +5063,10 @@ function readPersistedFloatSize(fallback) {
   } catch (_) {}
   return fallback;
 }
-function writePersistedFloatSize(size) {
+function writePersistedFloatSize(key, size) {
   try {
     if (typeof localStorage !== "undefined")
-      localStorage.setItem(FLOAT_SIZE_STORAGE_KEY, JSON.stringify(size));
+      localStorage.setItem(key, JSON.stringify(size));
   } catch (_) {}
 }
 function clampInt(raw, fallback, min, max) {
@@ -5263,7 +5265,9 @@ function setup(ctx) {
   let floatRootObserver = null;
   let floatHeightTimer = null;
   let stopWindowResizeWatch = null;
-  let floatSize = readPersistedFloatSize(desktopWidget ?? { width: 420, height: 560 });
+  const floatSizeKey = isWidgetWindow ? POPOUT_FLOAT_SIZE_STORAGE_KEY : FLOAT_SIZE_STORAGE_KEY;
+  let floatSize = readPersistedFloatSize(floatSizeKey, desktopWidget ?? { width: 420, height: 560 });
+  let pageSizeRestoreDeadline = 0;
   function syncFloatRootHeight(wroot) {
     const parent = wroot.parentElement;
     let available = parent && typeof parent.clientHeight === "number" && parent.clientHeight > 0 ? parent.clientHeight : 0;
@@ -5390,7 +5394,7 @@ function setup(ctx) {
       widthInput.value = String(width);
       heightInput.value = String(height);
       floatSize = { width, height };
-      writePersistedFloatSize(floatSize);
+      writePersistedFloatSize(floatSizeKey, floatSize);
       try {
         handle.setSize(width, height);
       } catch (_) {}
@@ -5420,9 +5424,12 @@ function setup(ctx) {
         syncFloatRootHeight(wroot);
         const width = Math.round(wroot.clientWidth);
         const height = Math.round(wroot.clientHeight);
-        if (width > 0 && height > 0 && (width !== floatSize.width || height !== floatSize.height)) {
+        const restoringPageSize = Date.now() < pageSizeRestoreDeadline;
+        if (restoringPageSize && width === floatSize.width && height === floatSize.height)
+          pageSizeRestoreDeadline = 0;
+        if (!restoringPageSize && width > 0 && height > 0 && (width !== floatSize.width || height !== floatSize.height)) {
           floatSize = { width, height };
-          writePersistedFloatSize(floatSize);
+          writePersistedFloatSize(floatSizeKey, floatSize);
         }
         if (typeof document !== "undefined" && document.activeElement !== widthInput) {
           widthInput.value = String(floatSize.width);
@@ -5445,6 +5452,10 @@ function setup(ctx) {
         return;
       if (floatHandle !== handle)
         return;
+      pageSizeRestoreDeadline = Date.now() + PAGE_SIZE_RESTORE_GRACE_MS;
+      try {
+        handle.setSize(floatSize.width, floatSize.height);
+      } catch (_) {}
       mountFloatContent(handle);
       loadCharacter();
     };
