@@ -136,16 +136,22 @@ interface SizeClamps {
   maxHeight: number;
 }
 
-/** Browser-mode clamps; the host clamps oversized widgets to the viewport on
- *  mobile anyway, these just keep the inputs sane. */
+/** Upper bound for the size strip and the persisted size. It is only a
+ *  sanity limit (8K), not a layout constraint: the host does its own clamping
+ *  (to the viewport in-page; Lumiverse Desktop currently caps pop-out setSize
+ *  at 1200×900 in DesktopFloatingWidgetHost / frontend.rs, while native edge
+ *  drags are uncapped), so the extension should never be the tighter limit. */
+const MAX_WIDGET_WIDTH = 7680;
+const MAX_WIDGET_HEIGHT = 4320;
+
+/** Browser-mode clamps; the host clamps oversized widgets to the viewport. */
 const BROWSER_SIZE_CLAMPS: SizeClamps = {
-  minWidth: 220, minHeight: 150, maxWidth: 1920, maxHeight: 1200,
+  minWidth: 220, minHeight: 150, maxWidth: MAX_WIDGET_WIDTH, maxHeight: MAX_WIDGET_HEIGHT,
 };
 
-/** Desktop pop-out windows resize via setSize and are clamped by Lumiverse
- *  Desktop to these bounds (see DesktopFloatingWidgetHost). */
+/** Desktop pop-out minimums match Lumiverse Desktop's chromed-widget minimum. */
 const DESKTOP_SIZE_CLAMPS: SizeClamps = {
-  minWidth: 160, minHeight: 100, maxWidth: 1200, maxHeight: 900,
+  minWidth: 160, minHeight: 100, maxWidth: MAX_WIDGET_WIDTH, maxHeight: MAX_WIDGET_HEIGHT,
 };
 
 /** Host-side geometry persistence is opt-in per placement (persistGeometry);
@@ -165,8 +171,8 @@ function readPersistedFloatSize(fallback: { width: number; height: number }): { 
     if (
       parsed && typeof parsed === "object" &&
       Number.isFinite(parsed.width) && Number.isFinite(parsed.height) &&
-      parsed.width >= 160 && parsed.width <= 1920 &&
-      parsed.height >= 100 && parsed.height <= 1200
+      parsed.width >= 160 && parsed.width <= MAX_WIDGET_WIDTH &&
+      parsed.height >= 100 && parsed.height <= MAX_WIDGET_HEIGHT
     ) {
       return { width: Math.round(parsed.width), height: Math.round(parsed.height) };
     }
@@ -188,6 +194,8 @@ function clampInt(raw: string, fallback: number, min: number, max: number): numb
 
 const ICON_EXPAND =
   '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
+const ICON_SCROLL_TOP =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
 const ICON_CLOSE =
   '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 
@@ -199,6 +207,13 @@ function iconButton(svg: string, label: string): HTMLButtonElement {
   button.innerHTML = svg;
   button.style.cssText =
     "display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:none;border-radius:4px;background:transparent;color:inherit;opacity:0.6;cursor:pointer;";
+  return button;
+}
+
+function scrollTopButton(view: { scrollToTop(): void }): HTMLButtonElement {
+  const button = iconButton(ICON_SCROLL_TOP, "Scroll to top");
+  button.style.marginLeft = "auto";
+  button.addEventListener("click", () => view.scrollToTop());
   return button;
 }
 
@@ -378,6 +393,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
     drawerView = createCharacterView(profileActions, `${EXTENSION_ID}:drawerTab`);
     drawerView.setFontScale(fontState.scale);
+    toolbar.appendChild(scrollTopButton(drawerView));
     root.appendChild(drawerView.element);
     root.appendChild(toolbar);
     unsubDrawerView = subscribe(drawerView.render);
@@ -607,8 +623,12 @@ export function setup(ctx: SpindleFrontendContext) {
     fontSpacer.style.flex = "1";
     sizeStrip.appendChild(fontSpacer);
     floatFontControls = makeFontControls();
-    sizeStrip.appendChild(floatFontControls.element);
-
+    // Keep scroll-to-top beside the size controls so they wrap as one group.
+    const stripEnd = document.createElement("span");
+    stripEnd.style.cssText = "display:inline-flex;align-items:center;gap:6px;";
+    stripEnd.appendChild(floatFontControls.element);
+    stripEnd.appendChild(scrollTopButton(floatView));
+    sizeStrip.appendChild(stripEnd);
     wroot.appendChild(sizeStrip);
     watchFloatRootHeight(wroot);
 

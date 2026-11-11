@@ -138,5 +138,10 @@ export function createCharacterView(actions: ProfileActions, storageKey?: string
       if (selected === 1) renderProfile();
       else if (state.kind !== "character") { profile.clear(); profileCharacter = null; }
     },
+    /** Scroll whichever tab is showing back to the top. */
+    scrollToTop() {
+      if (selected === 0) preview.scrollToTop();
+      else profile.element.scrollTop = 0;
+    },
   };
 }

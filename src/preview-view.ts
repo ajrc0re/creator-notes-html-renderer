@@ -11,6 +11,8 @@ export interface PreviewView {
   render(state: PreviewState): void;
   /** Re-renders the current HTML only when the scale actually changes. */
   setFontScale(scale: number): void;
+  /** Return the rendered notes to the top. */
+  scrollToTop(): void;
 }
 
 /** A preview surface: fills its container and renders sanitized creator notes
@@ -54,6 +56,11 @@ export function createPreviewView(): PreviewView {
     setFontScale(scale) {
       if (scale === fontScale) return;
       fontScale = scale;
+      if (current?.kind === "html") render(current);
+    },
+    // The iframe is fully sandboxed (opaque origin), so its document can't be
+    // scrolled from here; re-rendering it starts the notes back at the top.
+    scrollToTop() {
       if (current?.kind === "html") render(current);
     },
   };

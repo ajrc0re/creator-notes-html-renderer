@@ -674,6 +674,10 @@ function createPreviewView() {
       fontScale = scale;
       if (current?.kind === "html")
         render(current);
+    },
+    scrollToTop() {
+      if (current?.kind === "html")
+        render(current);
     }
   };
 }
@@ -4709,6 +4713,12 @@ function createCharacterView(actions, storageKey) {
         profile.clear();
         profileCharacter = null;
       }
+    },
+    scrollToTop() {
+      if (selected === 0)
+        preview.scrollToTop();
+      else
+        profile.element.scrollTop = 0;
     }
   };
 }
@@ -5025,17 +5035,19 @@ function inAnyDesktopWidgetWindow() {
     return false;
   }
 }
+var MAX_WIDGET_WIDTH = 7680;
+var MAX_WIDGET_HEIGHT = 4320;
 var BROWSER_SIZE_CLAMPS = {
   minWidth: 220,
   minHeight: 150,
-  maxWidth: 1920,
-  maxHeight: 1200
+  maxWidth: MAX_WIDGET_WIDTH,
+  maxHeight: MAX_WIDGET_HEIGHT
 };
 var DESKTOP_SIZE_CLAMPS = {
   minWidth: 160,
   minHeight: 100,
-  maxWidth: 1200,
-  maxHeight: 900
+  maxWidth: MAX_WIDGET_WIDTH,
+  maxHeight: MAX_WIDGET_HEIGHT
 };
 var PERSIST_GEOMETRY_KEY = "html-preview";
 var FLOAT_SIZE_STORAGE_KEY = `${EXTENSION_ID}:floatSize`;
@@ -5043,7 +5055,7 @@ function readPersistedFloatSize(fallback) {
   try {
     const raw = typeof localStorage === "undefined" ? null : localStorage.getItem(FLOAT_SIZE_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
-    if (parsed && typeof parsed === "object" && Number.isFinite(parsed.width) && Number.isFinite(parsed.height) && parsed.width >= 160 && parsed.width <= 1920 && parsed.height >= 100 && parsed.height <= 1200) {
+    if (parsed && typeof parsed === "object" && Number.isFinite(parsed.width) && Number.isFinite(parsed.height) && parsed.width >= 160 && parsed.width <= MAX_WIDGET_WIDTH && parsed.height >= 100 && parsed.height <= MAX_WIDGET_HEIGHT) {
       return { width: Math.round(parsed.width), height: Math.round(parsed.height) };
     }
   } catch (_) {}
@@ -5062,6 +5074,7 @@ function clampInt(raw, fallback, min, max) {
   return Math.min(max, Math.max(min, parsed));
 }
 var ICON_EXPAND = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
+var ICON_SCROLL_TOP = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
 var ICON_CLOSE = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 function iconButton(svg, label) {
   const button = document.createElement("button");
@@ -5070,6 +5083,12 @@ function iconButton(svg, label) {
   button.setAttribute("aria-label", label);
   button.innerHTML = svg;
   button.style.cssText = "display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:none;border-radius:4px;background:transparent;color:inherit;opacity:0.6;cursor:pointer;";
+  return button;
+}
+function scrollTopButton(view) {
+  const button = iconButton(ICON_SCROLL_TOP, "Scroll to top");
+  button.style.marginLeft = "auto";
+  button.addEventListener("click", () => view.scrollToTop());
   return button;
 }
 function configureSizeInput(input, label, value, min, max) {
@@ -5215,6 +5234,7 @@ function setup(ctx) {
     toolbar.appendChild(floatButton);
     drawerView = createCharacterView(profileActions, `${EXTENSION_ID}:drawerTab`);
     drawerView.setFontScale(fontState.scale);
+    toolbar.appendChild(scrollTopButton(drawerView));
     root.appendChild(drawerView.element);
     root.appendChild(toolbar);
     unsubDrawerView = subscribe(drawerView.render);
@@ -5387,7 +5407,11 @@ function setup(ctx) {
     fontSpacer.style.flex = "1";
     sizeStrip.appendChild(fontSpacer);
     floatFontControls = makeFontControls();
-    sizeStrip.appendChild(floatFontControls.element);
+    const stripEnd = document.createElement("span");
+    stripEnd.style.cssText = "display:inline-flex;align-items:center;gap:6px;";
+    stripEnd.appendChild(floatFontControls.element);
+    stripEnd.appendChild(scrollTopButton(floatView));
+    sizeStrip.appendChild(stripEnd);
     wroot.appendChild(sizeStrip);
     watchFloatRootHeight(wroot);
     if (typeof ResizeObserver !== "undefined") {

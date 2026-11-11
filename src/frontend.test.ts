@@ -270,23 +270,28 @@ test("float widget renders the preview, survives a desktop pop-out return, and c
     applyButton().handlers.click();
     expect(sizes).toEqual([[600, 700]]);
 
-    inputs()[0].value = "5000";
+    inputs()[0].value = "1720";
+    inputs()[1].value = "1362";
+    applyButton().handlers.click();
+    expect(sizes[sizes.length - 1]).toEqual([1720, 1362]);
+
+    inputs()[0].value = "9000";
     inputs()[1].value = "10";
     applyButton().handlers.click();
-    expect(sizes[sizes.length - 1]).toEqual([1920, 150]);
-    expect(inputs()[0].value).toBe("1920");
+    expect(sizes[sizes.length - 1]).toEqual([7680, 150]);
+    expect(inputs()[0].value).toBe("7680");
     expect(inputs()[1].value).toBe("150");
 
     inputs()[0].value = "abc"; // garbage falls back to the current size
     applyButton().handlers.click();
-    expect(sizes[sizes.length - 1]).toEqual([1920, 150]);
+    expect(sizes[sizes.length - 1]).toEqual([7680, 150]);
 
     inputs()[0].value = "500";
     inputs()[1].handlers.keydown({ key: "Enter" });
     expect(sizes[sizes.length - 1]).toEqual([500, 150]);
     inputs()[1].value = "900";
     inputs()[1].handlers.keydown({ key: "a" }); // non-Enter keys are ignored
-    expect(sizes.length).toBe(4);
+    expect(sizes.length).toBe(5);
     inputs()[1].handlers.keydown({ key: "Enter" });
     expect(sizes[sizes.length - 1]).toEqual([500, 900]);
 
@@ -495,7 +500,15 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     const titles = widgetButtons.map((b) => b.title);
     expect(titles).not.toContain("Close preview widget");
     expect(titles).not.toContain("Toggle fullscreen");
-    expect(widgetButtons.map((b) => b.textContent)).toEqual(["Creator Notes", "Profile", "Apply", "A−", "A+"]);
+    expect(widgetButtons.map((b) => b.textContent)).toEqual(["Creator Notes", "Profile", "Apply", "A−", "A+", ""]);
+    expect(titles[titles.length - 1]).toBe("Scroll to top");
+
+    // Scroll to top re-renders the sandboxed notes iframe (its document is
+    // unreachable from here), which starts it back at the top.
+    const framesBefore = dom.frames.length;
+    widgetButtons[widgetButtons.length - 1].handlers.click();
+    expect(dom.frames).toHaveLength(framesBefore + 1);
+    expect(dom.frames[dom.frames.length - 1].srcdoc).toContain("notes for b");
 
     // The strip starts at the persisted size; a host-driven resize (native
     // window edges) is tracked live, persisted, and reflected in the inputs.
@@ -507,11 +520,12 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     expect(inputs().map((n) => n.value)).toEqual(["640", "520"]);
     expect(storage.get("creator_notes_html_renderer:floatSize")).toBe('{"width":640,"height":520}');
 
-    // Size strip uses the desktop pop-out clamps (160–1200 × 100–900).
-    inputs()[0].value = "2000";
+    // Size strip uses the desktop pop-out clamps (160–7680 × 100–4320), so
+    // large sizes like 1720×1362 go through untouched.
+    inputs()[0].value = "9000";
     inputs()[1].value = "50";
     widgetButtons.find((button) => button.textContent === "Apply")!.handlers.click();
-    expect(sizes[1]).toEqual([1200, 100]);
+    expect(sizes[1]).toEqual([7680, 100]);
 
     cleanup();
     expect(destroyCount).toBe(1);
@@ -525,8 +539,8 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     win = installWindowStub("?desktopWidgetExtension=unknown-id&desktopWidgetWidth=300&desktopWidgetHeight=250");
     cleanup = setup(makeCtx() as any);
     expect(created).toBe(2);
-    expect(createdOptions[1]).toMatchObject({ width: 1200, height: 100 });
-    expect(sizes[2]).toEqual([1200, 100]);
+    expect(createdOptions[1]).toMatchObject({ width: 7680, height: 100 });
+    expect(sizes[2]).toEqual([7680, 100]);
     await flush();
     expect(dom.frames[dom.frames.length - 1].srcdoc).toContain("notes for b");
     cleanup();
