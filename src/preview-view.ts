@@ -9,6 +9,8 @@ export type PreviewState =
 export interface PreviewView {
   element: HTMLElement;
   render(state: PreviewState): void;
+  /** Re-renders the current HTML only when the scale actually changes. */
+  setFontScale(scale: number): void;
   /** Return the rendered notes to the top. */
   scrollToTop(): void;
 }
@@ -19,6 +21,8 @@ export function createPreviewView(): PreviewView {
   const element = document.createElement("div");
   element.style.cssText =
     "flex:1;width:100%;min-width:0;min-height:0;overflow:hidden;";
+  let fontScale = 1;
+  let current: PreviewState | null = null;
 
   function renderMessage(message: string, isError: boolean) {
     const el = document.createElement("p");
@@ -31,8 +35,6 @@ export function createPreviewView(): PreviewView {
     element.replaceChildren(el);
   }
 
-  let current: PreviewState | null = null;
-
   function render(state: PreviewState) {
     current = state;
     if (state.kind !== "html") {
@@ -44,13 +46,18 @@ export function createPreviewView(): PreviewView {
     iframe.title = "Creator notes HTML preview";
     iframe.style.cssText =
       "display:block;width:100%;min-width:0;height:100%;border:none;background:transparent;";
-    iframe.srcdoc = buildPreviewDocument(sanitize(state.html));
+    iframe.srcdoc = buildPreviewDocument(sanitize(state.html), fontScale);
     element.replaceChildren(iframe);
   }
 
   return {
     element,
     render,
+    setFontScale(scale) {
+      if (scale === fontScale) return;
+      fontScale = scale;
+      if (current?.kind === "html") render(current);
+    },
     // The iframe is fully sandboxed (opaque origin), so its document can't be
     // scrolled from here; re-rendering it starts the notes back at the top.
     scrollToTop() {

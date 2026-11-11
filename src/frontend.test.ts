@@ -261,7 +261,7 @@ test("float widget renders the preview, survives a desktop pop-out return, and c
     expect(reads).toEqual(["a", "a"]);
 
     // Size strip: Apply calls setSize with clamped values; Enter submits.
-    const inputs = () => dom.nodes.filter((n) => n.tag === "input");
+    const inputs = () => dom.nodes.filter((n) => n.tag === "input" && n.type === "number");
     const applyButton = () => dom.buttons().find((b) => b.textContent === "Apply")!;
     expect(createdOptions[0]).toMatchObject({ width: 420, height: 560 });
 
@@ -500,7 +500,7 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     const titles = widgetButtons.map((b) => b.title);
     expect(titles).not.toContain("Close preview widget");
     expect(titles).not.toContain("Toggle fullscreen");
-    expect(widgetButtons.map((b) => b.textContent)).toEqual(["Creator Notes", "Profile", "Apply", ""]);
+    expect(widgetButtons.map((b) => b.textContent)).toEqual(["Creator Notes", "Profile", "Apply", "A−", "A+", ""]);
     expect(titles[titles.length - 1]).toBe("Scroll to top");
 
     // Scroll to top re-renders the sandboxed notes iframe (its document is
@@ -549,6 +549,93 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     ro.restore();
     storage.restore();
     interval.restore();
+    dom.restore();
+  }
+});
+
+test("text size controls persist per character and can follow the theme font scale", async () => {
+  const dom = installDomStub();
+  const storage = installLocalStorageStub();
+  const interval = installIntervalStub();
+  const savedComputed = (globalThis as any).getComputedStyle;
+  let themeScale = "1.2";
+  (globalThis.document as any).documentElement = {};
+  (globalThis as any).getComputedStyle = () => ({
+    getPropertyValue: (name: string) => (name === "--lumiverse-font-scale" ? themeScale : ""),
+  });
+  let characterId = "a";
+  const events: Record<string, () => void> = {};
+  let cleanup: (() => void) | undefined;
+  try {
+    cleanup = setup({
+      ui: { registerDrawerTab: () => ({ root: { style: {}, appendChild() {} },
+        onActivate: () => () => {}, destroy() {} }),
+        createFloatWidget: makeFloatWidgetHandle },
+      getActiveChat: () => ({ characterId }),
+      characters: { get(id: string) {
+        return Promise.resolve({ id, creator_notes: `notes for ${id}` });
+      } },
+      events: { on(name: string, callback: () => void) { events[name] = callback; return () => {}; } },
+    } as any);
+    await flush();
+
+    const button = (text: string) => dom.buttons().find((b) => b.textContent === text)! as any;
+    const checkbox = dom.nodes.find((n) => n.tag === "input" && n.type === "checkbox")! as any;
+    const lastFrame = () => dom.frames[dom.frames.length - 1].srcdoc;
+    const label = () => dom.nodes.find((n) => n.tag === "span" && /^\d+%$/.test(n.textContent))!.textContent;
+
+    // Unsaved character starts at the theme scale, with the buttons enabled.
+    expect(label()).toBe("120%");
+    expect(lastFrame()).toContain("zoom: 1.2");
+    expect(button("A+").disabled).toBe(false);
+    expect(checkbox.checked).toBe(false);
+
+    button("A+").handlers.click();
+    button("A+").handlers.click();
+    expect(label()).toBe("140%");
+    expect(lastFrame()).toContain("zoom: 1.4");
+    expect(storage.get("creator_notes_html_renderer:fontScale:char:a")).toBe("1.4");
+
+    // Another character keeps its own size; switching back restores "a".
+    characterId = "b";
+    events.CHAT_SWITCHED();
+    await flush();
+    expect(label()).toBe("120%");
+    button("A−").handlers.click();
+    expect(label()).toBe("110%");
+    characterId = "a";
+    events.CHAT_SWITCHED();
+    await flush();
+    expect(label()).toBe("140%");
+    expect(lastFrame()).toContain("notes for a");
+    expect(lastFrame()).toContain("zoom: 1.4");
+
+    // Follow theme: theme scale wins, buttons disabled, clicks ignored.
+    checkbox.checked = true;
+    checkbox.handlers.change();
+    expect(label()).toBe("120%");
+    expect(button("A+").disabled).toBe(true);
+    expect(button("A−").disabled).toBe(true);
+    button("A+").handlers.click();
+    expect(storage.get("creator_notes_html_renderer:fontScale:char:a")).toBe("1.4");
+
+    // A theme change is picked up by the poll.
+    themeScale = "1.5";
+    interval.tick();
+    expect(label()).toBe("150%");
+    expect(lastFrame()).toContain("zoom: 1.5");
+
+    // Unfollowing brings back the saved per-character size.
+    checkbox.checked = false;
+    checkbox.handlers.change();
+    expect(label()).toBe("140%");
+    expect(button("A+").disabled).toBe(false);
+  } finally {
+    cleanup?.();
+    (globalThis as any).getComputedStyle = savedComputed;
+    if (savedComputed === undefined) delete (globalThis as any).getComputedStyle;
+    interval.restore();
+    storage.restore();
     dom.restore();
   }
 });

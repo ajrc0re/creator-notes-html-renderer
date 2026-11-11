@@ -5,6 +5,14 @@ import type {
 } from "lumiverse-spindle-types";
 import { createCharacterView, type CharacterState } from "./character-view";
 import { createProfileActions } from "./profile-actions";
+import {
+  createFontControls,
+  resolveFontScale,
+  writeCharacterFontScale,
+  writeFollowTheme,
+  type FontControls,
+  type FontScaleState,
+} from "./font-scale";
 
 /** Must match `identifier` in spindle.json. */
 const EXTENSION_ID = "creator_notes_html_renderer";
@@ -250,7 +258,55 @@ export function setup(ctx: SpindleFrontendContext) {
 
   function broadcast(state: CharacterState) {
     latestState = state;
+    // Size first, so a new character's preview renders once at its own scale.
+    refreshFontScale(true);
     for (const listener of listeners) listener(state);
+  }
+
+  // ── Text size: per character, or following the theme font scale ──
+  let fontState: FontScaleState = resolveFontScale(null);
+  let drawerFontControls: FontControls | null = null;
+  let floatFontControls: FontControls | null = null;
+  // Declared here, not with the other float state: broadcast() reaches it
+  // through refreshFontScale() before the float section has run.
+  let drawerView: ReturnType<typeof createCharacterView> | null = null;
+  let floatView: ReturnType<typeof createCharacterView> | null = null;
+
+  function displayedCharacterId(): string | null {
+    return latestState?.kind === "character" ? latestState.character.id ?? null : null;
+  }
+
+  /** Re-resolve the scale (storage, theme) and push it to both placements.
+   *  The poll calls this unforced, so theme changes and edits made in another
+   *  window (a desktop pop-out shares localStorage) are picked up cheaply. */
+  function refreshFontScale(force = false) {
+    const next = resolveFontScale(displayedCharacterId());
+    if (
+      !force && next.scale === fontState.scale &&
+      next.followTheme === fontState.followTheme && next.adjustable === fontState.adjustable
+    ) return;
+    fontState = next;
+    drawerView?.setFontScale(next.scale);
+    floatView?.setFontScale(next.scale);
+    drawerFontControls?.update(next);
+    floatFontControls?.update(next);
+  }
+
+  function makeFontControls(): FontControls {
+    const controls = createFontControls({
+      step(delta) {
+        const characterId = displayedCharacterId();
+        if (!characterId || fontState.followTheme) return;
+        writeCharacterFontScale(characterId, fontState.scale + delta);
+        refreshFontScale(true);
+      },
+      setFollowTheme(follow) {
+        writeFollowTheme(follow);
+        refreshFontScale(true);
+      },
+    });
+    controls.update(fontState);
+    return controls;
   }
 
   function resolveActiveCharacterId(): string | null {
@@ -292,7 +348,6 @@ export function setup(ctx: SpindleFrontendContext) {
 
   // ── Drawer tab (main window only; a pop-out window renders no drawer) ──
   const teardownSteps: (() => void)[] = [];
-  let drawerView: ReturnType<typeof createCharacterView> | null = null;
   let unsubDrawerView: (() => void) | null = null;
   let unsubActivate: (() => void) | null = null;
   let runtimeExtensionId = getRuntimeExtensionId();
@@ -313,7 +368,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
     const toolbar = document.createElement("div");
     toolbar.style.cssText =
-      "display:flex;align-items:center;gap:8px;padding:6px 8px;flex:0 0 auto;border-bottom:1px solid rgba(128,128,128,0.25);";
+      "display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:6px 8px;flex:0 0 auto;border-bottom:1px solid rgba(128,128,128,0.25);";
 
     const toolbarLabel = document.createElement("span");
     toolbarLabel.textContent = "Character";
@@ -323,6 +378,9 @@ export function setup(ctx: SpindleFrontendContext) {
     const toolbarSpacer = document.createElement("span");
     toolbarSpacer.style.flex = "1";
     toolbar.appendChild(toolbarSpacer);
+
+    drawerFontControls = makeFontControls();
+    toolbar.appendChild(drawerFontControls.element);
 
     const floatButton = document.createElement("button");
     floatButton.type = "button";
@@ -334,6 +392,7 @@ export function setup(ctx: SpindleFrontendContext) {
     toolbar.appendChild(floatButton);
 
     drawerView = createCharacterView(profileActions, `${EXTENSION_ID}:drawerTab`);
+    drawerView.setFontScale(fontState.scale);
     toolbar.appendChild(scrollTopButton(drawerView));
     root.appendChild(drawerView.element);
     root.appendChild(toolbar);
@@ -363,11 +422,11 @@ export function setup(ctx: SpindleFrontendContext) {
     if (!disposed && resolveActiveCharacterId() !== observedCharacterId) {
       void loadCharacter();
     }
+    if (!disposed) refreshFontScale();
   }, 500);
 
   // ── Floating widget ──
   let floatHandle: SpindleFloatWidgetHandle | null = null;
-  let floatView: ReturnType<typeof createCharacterView> | null = null;
   let unsubFloatView: (() => void) | null = null;
   let unsubDesktopReturned: (() => void) | null = null;
   let floatResizeObserver: ResizeObserver | null = null;
@@ -498,6 +557,7 @@ export function setup(ctx: SpindleFrontendContext) {
     }
 
     floatView = createCharacterView(profileActions, `${EXTENSION_ID}:floatTab`);
+    floatView.setFontScale(fontState.scale);
     wroot.appendChild(floatView.element);
     if (latestState) floatView.render(latestState);
 
@@ -557,7 +617,18 @@ export function setup(ctx: SpindleFrontendContext) {
       });
     }
 
-    sizeStrip.appendChild(scrollTopButton(floatView));
+    // Text size controls share the strip; wrap onto a second row when narrow.
+    sizeStrip.style.flexWrap = "wrap";
+    const fontSpacer = document.createElement("span");
+    fontSpacer.style.flex = "1";
+    sizeStrip.appendChild(fontSpacer);
+    floatFontControls = makeFontControls();
+    // Keep scroll-to-top beside the size controls so they wrap as one group.
+    const stripEnd = document.createElement("span");
+    stripEnd.style.cssText = "display:inline-flex;align-items:center;gap:6px;";
+    stripEnd.appendChild(floatFontControls.element);
+    stripEnd.appendChild(scrollTopButton(floatView));
+    sizeStrip.appendChild(stripEnd);
     wroot.appendChild(sizeStrip);
     watchFloatRootHeight(wroot);
 
@@ -609,6 +680,7 @@ export function setup(ctx: SpindleFrontendContext) {
     unsubDesktopReturned = null;
     stopFloatRootHeightWatch();
     floatView = null;
+    floatFontControls = null;
     if (floatHandle) {
       try { floatHandle.destroy(); } catch (_) {}
       floatHandle = null;
