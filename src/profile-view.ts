@@ -34,39 +34,82 @@ const fields = [
   ["description", "Description", "No description defined", "book"],
   ["personality", "Personality", "No personality defined", "sparkles"],
   ["scenario", "Scenario", "No scenario defined", "file"],
-  ["system_prompt", "System Prompt", "No system prompt", "file"],
-  ["post_history_instructions", "Post-History Instructions", "No post-history instructions", "file"],
-  ["mes_example", "Message Examples", "No message examples", "message"],
-  ["first_mes", "First Message", "No first message", "message"],
+  ["system_prompt", "System Prompt", "No system prompt defined", "file"],
+  ["post_history_instructions", "Post-History Instructions", "No post-history instructions defined", "file"],
+  ["mes_example", "Message Examples", "No message examples defined", "message"],
+  ["first_mes", "First Message", "No first message defined", "message"],
 ] as const;
 
-export function createProfileView(actions: ProfileActions) {
+/** Whether pressing expand/collapse-all would open or close the sections;
+ *  null when nothing on the page can be expanded. */
+export type ExpandAllAction = "expand" | "collapse" | null;
+
+export function createProfileView(actions: ProfileActions, onExpandChange?: () => void) {
   const element = document.createElement("div");
   element.className = "cnhr-profile";
   const expanded = new Map<string, boolean>();
+  let sections: HTMLDetailsElement[] = [];
   let characterId: string | null = null;
   let renderVersion = 0;
 
-  function section(key: string, title: string, icon: keyof typeof icons, open = false) {
-    const details = document.createElement("details");
-    details.className = "cnhr-section";
-    details.open = expanded.get(key) ?? open;
-    const id = characterId;
-    details.addEventListener("toggle", () => {
-      if (characterId === id) expanded.set(key, details.open);
-    });
-    const summary = document.createElement("summary");
+  function sectionHeader(header: HTMLElement, title: string, icon: keyof typeof icons) {
     const badge = document.createElement("span");
     badge.className = "cnhr-section-icon";
     badge.setAttribute("aria-hidden", "true");
     badge.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${icons[icon]}</svg>`;
     const label = document.createElement("span");
     label.textContent = title;
-    summary.appendChild(badge);
-    summary.appendChild(label);
+    header.appendChild(badge);
+    header.appendChild(label);
+  }
+
+  function section(key: string, title: string, icon: keyof typeof icons, open = false) {
+    const details = document.createElement("details");
+    details.className = "cnhr-section";
+    details.dataset.key = key;
+    details.open = expanded.get(key) ?? open;
+    const id = characterId;
+    details.addEventListener("toggle", () => {
+      if (characterId === id) expanded.set(key, details.open);
+      onExpandChange?.();
+    });
+    const summary = document.createElement("summary");
+    sectionHeader(summary, title, icon);
     details.appendChild(summary);
     element.appendChild(details);
+    sections.push(details);
     return details;
+  }
+
+  /** A section with nothing in it: a greyed header that does not expand,
+   *  with the placeholder beside the title instead of inside a body. */
+  function emptySection(title: string, icon: keyof typeof icons, placeholder: string) {
+    const block = document.createElement("div");
+    block.className = "cnhr-section cnhr-section-empty";
+    const header = document.createElement("div");
+    header.className = "cnhr-section-header";
+    sectionHeader(header, title, icon);
+    const note = document.createElement("span");
+    note.className = "cnhr-section-placeholder";
+    note.textContent = placeholder;
+    header.appendChild(note);
+    block.appendChild(header);
+    element.appendChild(block);
+  }
+
+  function expandAllAction(): ExpandAllAction {
+    if (!sections.length) return null;
+    return sections.every((details) => details.open) ? "collapse" : "expand";
+  }
+
+  function setAllExpanded(open: boolean) {
+    for (const details of sections) {
+      details.open = open;
+      // Record it now: the toggle event arrives later, and a re-render in
+      // between should keep the new state.
+      if (characterId) expanded.set(details.dataset.key ?? "", open);
+    }
+    onExpandChange?.();
   }
 
   function prose(text: string, placeholder: string) {
@@ -93,19 +136,22 @@ export function createProfileView(actions: ProfileActions) {
       element.scrollTop = 0;
     }
     element.replaceChildren();
+    sections = [];
     const heading = document.createElement("h2");
     heading.className = "cnhr-character-name";
     heading.textContent = character.name || "Character Profile";
     element.appendChild(heading);
     for (const [key, title, placeholder, icon] of fields) {
-      section(key, title, icon).appendChild(prose(character[key] ?? "", placeholder));
+      const text = character[key] ?? "";
+      if (text.trim()) section(key, title, icon).appendChild(prose(text, placeholder));
+      else emptySection(title, icon, placeholder);
     }
 
     const greetings = character.alternate_greetings ?? [];
-    const alternatives = section("alternate_greetings", "Alternate Greetings", "message");
+    if (!greetings.length) emptySection("Alternate Greetings", "message", "No alternate greetings defined");
+    const alternatives = greetings.length ? section("alternate_greetings", "Alternate Greetings", "message") : null;
     const greetingList = document.createElement("div");
     greetingList.className = "cnhr-greetings";
-    if (!greetings.length) greetingList.appendChild(prose("", "No alternate greetings"));
     greetings.forEach((greeting, index) => {
       const item = document.createElement("details");
       item.className = "cnhr-greeting";
@@ -137,18 +183,20 @@ export function createProfileView(actions: ProfileActions) {
       item.appendChild(body);
       greetingList.appendChild(item);
     });
-    alternatives.appendChild(greetingList);
+    alternatives?.appendChild(greetingList);
 
+    const ids = [...new Set(character.world_book_ids ?? [])];
+    const embedded = embeddedLorebook(character);
+    if (!ids.length && !embedded) {
+      emptySection("Attached World Books", "book", "No world books defined");
+      onExpandChange?.();
+      return;
+    }
     const books = section("world_book_ids", "Attached World Books", "book");
     const bookList = document.createElement("div");
     bookList.className = "cnhr-books";
     books.appendChild(bookList);
-    const ids = [...new Set(character.world_book_ids ?? [])];
-    const embedded = embeddedLorebook(character);
-    if (!ids.length && !embedded) {
-      bookList.appendChild(prose("", "No world books attached"));
-      return;
-    }
+    onExpandChange?.();
 
     const status = document.createElement("p");
     status.className = "cnhr-book-status";
@@ -208,5 +256,18 @@ export function createProfileView(actions: ProfileActions) {
     }
   }
 
-  return { element, render, clear() { ++renderVersion; characterId = null; expanded.clear(); element.replaceChildren(); } };
+  return {
+    element,
+    render,
+    expandAllAction,
+    setAllExpanded,
+    clear() {
+      ++renderVersion;
+      characterId = null;
+      expanded.clear();
+      sections = [];
+      element.replaceChildren();
+      onExpandChange?.();
+    },
+  };
 }
