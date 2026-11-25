@@ -204,6 +204,11 @@ const ICON_EXPAND =
   '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
 const ICON_SCROLL_TOP =
   '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
+// Arrows apart: pressing opens every section. Arrows together: closes them.
+const ICON_EXPAND_ALL =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>';
+const ICON_COLLAPSE_ALL =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/></svg>';
 const ICON_CLOSE =
   '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 
@@ -218,11 +223,32 @@ function iconButton(svg: string, label: string): HTMLButtonElement {
   return button;
 }
 
-function scrollTopButton(view: { scrollToTop(): void }): HTMLButtonElement {
-  const button = iconButton(ICON_SCROLL_TOP, "Scroll to top");
-  button.style.marginLeft = "auto";
-  button.addEventListener("click", () => view.scrollToTop());
-  return button;
+type CharacterView = ReturnType<typeof createCharacterView>;
+
+/** Expand/collapse-all and scroll-to-top, kept together at the end of a
+ *  strip. Expand/collapse-all only shows on the Profile tab, and its icon
+ *  says what the next press does. The listener lives and dies with the view. */
+function viewNavButtons(view: CharacterView): HTMLSpanElement {
+  const group = document.createElement("span");
+  group.style.cssText = "display:inline-flex;align-items:center;gap:6px;margin-left:auto;";
+  const toggle = iconButton(ICON_EXPAND_ALL, "Expand all sections");
+  toggle.addEventListener("click", () => view.toggleExpandAll());
+  const scrollTop = iconButton(ICON_SCROLL_TOP, "Scroll to top");
+  scrollTop.addEventListener("click", () => view.scrollToTop());
+  group.appendChild(toggle);
+  group.appendChild(scrollTop);
+  let shown: string | null | undefined;
+  view.onExpandAllChange((action) => {
+    if (action === shown) return;
+    shown = action;
+    toggle.style.display = action ? "inline-flex" : "none";
+    if (!action) return;
+    const label = action === "expand" ? "Expand all sections" : "Collapse all sections";
+    toggle.innerHTML = action === "expand" ? ICON_EXPAND_ALL : ICON_COLLAPSE_ALL;
+    toggle.title = label;
+    toggle.setAttribute("aria-label", label);
+  });
+  return group;
 }
 
 function configureSizeInput(
@@ -401,7 +427,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
     drawerView = createCharacterView(profileActions, `${EXTENSION_ID}:drawerTab`);
     drawerView.setFontScale(fontState.scale);
-    toolbar.appendChild(scrollTopButton(drawerView));
+    toolbar.appendChild(viewNavButtons(drawerView));
     root.appendChild(drawerView.element);
     root.appendChild(toolbar);
     unsubDrawerView = subscribe(drawerView.render);
@@ -633,11 +659,11 @@ export function setup(ctx: SpindleFrontendContext) {
     fontSpacer.style.flex = "1";
     sizeStrip.appendChild(fontSpacer);
     floatFontControls = makeFontControls();
-    // Keep scroll-to-top beside the size controls so they wrap as one group.
+    // Keep expand/collapse-all and scroll-to-top beside the size controls so they wrap as one group.
     const stripEnd = document.createElement("span");
     stripEnd.style.cssText = "display:inline-flex;align-items:center;gap:6px;";
     stripEnd.appendChild(floatFontControls.element);
-    stripEnd.appendChild(scrollTopButton(floatView));
+    stripEnd.appendChild(viewNavButtons(floatView));
     sizeStrip.appendChild(stripEnd);
     wroot.appendChild(sizeStrip);
     watchFloatRootHeight(wroot);

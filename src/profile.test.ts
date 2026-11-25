@@ -113,11 +113,54 @@ test("tab keyboard controls and empty field placeholders work", async () => with
   const notes = view.element.querySelector<HTMLButtonElement>('[role="tab"]')!;
   notes.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
   expect(document.activeElement?.textContent).toBe("Profile");
-  expect(section(view.element, "Description").textContent).toContain("No description defined");
-  expect(section(view.element, "Alternate Greetings").textContent).toContain("No alternate greetings");
-  expect(section(view.element, "Attached World Books").textContent).toContain("No world books attached");
+  // Empty sections are greyed headers with the placeholder beside the title,
+  // not expandable sections with the placeholder inside.
+  const empty = [...view.element.querySelectorAll<HTMLElement>(".cnhr-section-empty")];
+  expect(empty.map((item) => item.querySelector(".cnhr-section-placeholder")?.textContent)).toEqual([
+    "No description defined", "No alternate greetings defined", "No world books defined",
+  ]);
+  for (const item of empty) {
+    expect(item.tagName).toBe("DIV");
+    expect(item.querySelector("details,summary")).toBeNull();
+  }
+  expect(section(view.element, "Description")).toBeUndefined();
+  expect(view.element.querySelectorAll("details.cnhr-section")).toHaveLength(6);
   document.activeElement!.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Home", bubbles: true }));
   expect(document.activeElement?.textContent).toBe("Creator Notes");
+}));
+
+test("expand/collapse all opens every section, then closes them, and only applies on the Profile tab", async () => withDom(() => {
+  const view = createCharacterView(actions);
+  document.body.appendChild(view.element);
+  view.render({ kind: "character", character: card("a", { scenario: "" }) });
+  const seen: Array<string | null> = [];
+  view.onExpandAllChange((action) => seen.push(action));
+  expect(view.expandAllAction()).toBeNull(); // Creator Notes tab
+  clickTab(view.element, "Profile");
+  expect(view.expandAllAction()).toBe("expand");
+  const sections = () => [...view.element.querySelectorAll<HTMLDetailsElement>("details.cnhr-section")];
+  expect(sections()).toHaveLength(8);
+  view.toggleExpandAll();
+  expect(sections().every((item) => item.open)).toBe(true);
+  expect(view.expandAllAction()).toBe("collapse");
+  view.toggleExpandAll();
+  expect(sections().some((item) => item.open)).toBe(false);
+  expect(view.expandAllAction()).toBe("expand");
+  // Opening the last closed section by hand flips the button to collapse.
+  view.toggleExpandAll();
+  sections()[0].open = false;
+  sections()[0].dispatchEvent(new window.Event("toggle"));
+  expect(view.expandAllAction()).toBe("expand");
+  sections()[0].open = true;
+  sections()[0].dispatchEvent(new window.Event("toggle"));
+  expect(view.expandAllAction()).toBe("collapse");
+  // Expanded state survives a re-render of the same character.
+  view.render({ kind: "character", character: card("a", { scenario: "", personality: "Kinder" }) });
+  expect(sections().every((item) => item.open)).toBe(true);
+  clickTab(view.element, "Creator Notes");
+  expect(view.expandAllAction()).toBeNull();
+  // Listeners hear every change (repeats are fine; the button skips them).
+  expect(seen.filter((action, i) => action !== seen[i - 1])).toEqual([null, "expand", "collapse", "expand", "collapse", "expand", "collapse", null]);
 }));
 
 test("both placements update the full profile, clear old cards immediately, and reject stale reads", async () => withDom(async () => {

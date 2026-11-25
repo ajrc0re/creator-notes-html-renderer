@@ -523,7 +523,8 @@ test("desktop pop-out window auto-creates the widget without drawer chrome", asy
     const titles = widgetButtons.map((b) => b.title);
     expect(titles).not.toContain("Close preview widget");
     expect(titles).not.toContain("Toggle fullscreen");
-    expect(widgetButtons.map((b) => b.textContent)).toEqual(["Creator Notes", "Profile", "Apply", "A−", "A+", ""]);
+    expect(widgetButtons.map((b) => b.textContent)).toEqual(["Creator Notes", "Profile", "Apply", "A−", "A+", "", ""]);
+    expect(titles[titles.length - 2]).toBe("Expand all sections");
     expect(titles[titles.length - 1]).toBe("Scroll to top");
 
     // Scroll to top re-renders the sandboxed notes iframe (its document is

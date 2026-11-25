@@ -1,6 +1,6 @@
 import type { CharacterDTO } from "lumiverse-spindle-types";
 import { createPreviewView, type PreviewState } from "./preview-view";
-import { createProfileView, type ProfileActions } from "./profile-view";
+import { createProfileView, type ExpandAllAction, type ProfileActions } from "./profile-view";
 
 export type CharacterState =
   | { kind: "character"; character: CharacterDTO }
@@ -21,6 +21,9 @@ const styles = `
 .cnhr-section > summary::-webkit-details-marker,.cnhr-greeting > summary::-webkit-details-marker { display:none; }
 .cnhr-section > summary::after { content:'';width:5px;height:5px;margin-left:auto;margin-right:5px;flex-shrink:0;border-right:1.5px solid var(--lumiverse-text-muted,#85818e);border-bottom:1.5px solid var(--lumiverse-text-muted,#85818e);transform:rotate(-45deg); }
 .cnhr-section[open] > summary::after { transform:rotate(45deg); }
+.cnhr-section-empty > .cnhr-section-header { display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--lumiverse-primary-010,rgba(128,128,128,.16));font-weight:600;color:var(--lumiverse-text-dim,#85818e);opacity:.55;cursor:default; }
+.cnhr-section-empty .cnhr-section-icon { background:var(--lumiverse-primary-005,rgba(128,128,128,.08));color:inherit; }
+.cnhr-section-placeholder { margin-left:auto;font-weight:400;font-style:italic;font-size:.9em;text-align:right; }
 .cnhr-section-icon { display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:6px;background:var(--lumiverse-primary-010,rgba(172,162,201,.1));color:var(--lumiverse-primary,#aca2c9);flex-shrink:0; }
 .cnhr-prose { padding:12px 0 4px;line-height:1.7;overflow-wrap:anywhere;color:var(--lumiverse-text-muted,#b4b1ba); }
 .cnhr-prose > :first-child { margin-top:0; }.cnhr-prose > :last-child { margin-bottom:0; }
@@ -57,13 +60,23 @@ export function createCharacterView(actions: ProfileActions, storageKey?: string
   const preview = createPreviewView();
   const profilePanel = document.createElement("div");
   profilePanel.className = "cnhr-profile-panel";
-  const profile = createProfileView(actions);
+  const expandListeners = new Set<(action: ExpandAllAction) => void>();
+  const profile = createProfileView(actions, () => notifyExpand());
   profilePanel.appendChild(profile.element);
   const id = `cnhr-${++viewId}`;
   const panels = [preview.element, profilePanel];
   let selected = 0;
   let state: CharacterState | null = null;
   let profileCharacter: CharacterDTO | null = null;
+
+  function expandAllAction(): ExpandAllAction {
+    return selected === 1 ? profile.expandAllAction() : null;
+  }
+
+  function notifyExpand() {
+    const action = expandAllAction();
+    for (const listener of expandListeners) listener(action);
+  }
 
   function renderProfile() {
     if (state?.kind === "character") {
@@ -89,6 +102,7 @@ export function createCharacterView(actions: ProfileActions, storageKey?: string
       panels[i].style.display = i === selected ? "block" : "none";
     });
     if (selected === 1) renderProfile();
+    notifyExpand();
     try { if (storageKey && typeof localStorage !== "undefined") localStorage.setItem(storageKey, String(index)); } catch (_) {}
   }
 
@@ -137,6 +151,19 @@ export function createCharacterView(actions: ProfileActions, storageKey?: string
       }
       if (selected === 1) renderProfile();
       else if (state.kind !== "character") { profile.clear(); profileCharacter = null; }
+    },
+    /** What expand/collapse-all would do right now (null hides the button). */
+    expandAllAction,
+    /** Expand every profile section, or collapse them all when all are open. */
+    toggleExpandAll() {
+      const action = expandAllAction();
+      if (action) profile.setAllExpanded(action === "expand");
+    },
+    /** Called with the new action whenever it may have changed. */
+    onExpandAllChange(listener: (action: ExpandAllAction) => void) {
+      expandListeners.add(listener);
+      listener(expandAllAction());
+      return () => { expandListeners.delete(listener); };
     },
     /** Scroll whichever tab is showing back to the top. */
     scrollToTop() {

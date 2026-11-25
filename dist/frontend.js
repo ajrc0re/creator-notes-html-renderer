@@ -4395,38 +4395,71 @@ var fields = [
   ["description", "Description", "No description defined", "book"],
   ["personality", "Personality", "No personality defined", "sparkles"],
   ["scenario", "Scenario", "No scenario defined", "file"],
-  ["system_prompt", "System Prompt", "No system prompt", "file"],
-  ["post_history_instructions", "Post-History Instructions", "No post-history instructions", "file"],
-  ["mes_example", "Message Examples", "No message examples", "message"],
-  ["first_mes", "First Message", "No first message", "message"]
+  ["system_prompt", "System Prompt", "No system prompt defined", "file"],
+  ["post_history_instructions", "Post-History Instructions", "No post-history instructions defined", "file"],
+  ["mes_example", "Message Examples", "No message examples defined", "message"],
+  ["first_mes", "First Message", "No first message defined", "message"]
 ];
-function createProfileView(actions) {
+function createProfileView(actions, onExpandChange) {
   const element = document.createElement("div");
   element.className = "cnhr-profile";
   const expanded = new Map;
+  let sections = [];
   let characterId = null;
   let renderVersion = 0;
-  function section(key, title, icon, open = false) {
-    const details = document.createElement("details");
-    details.className = "cnhr-section";
-    details.open = expanded.get(key) ?? open;
-    const id = characterId;
-    details.addEventListener("toggle", () => {
-      if (characterId === id)
-        expanded.set(key, details.open);
-    });
-    const summary = document.createElement("summary");
+  function sectionHeader(header, title, icon) {
     const badge = document.createElement("span");
     badge.className = "cnhr-section-icon";
     badge.setAttribute("aria-hidden", "true");
     badge.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${icons[icon]}</svg>`;
     const label = document.createElement("span");
     label.textContent = title;
-    summary.appendChild(badge);
-    summary.appendChild(label);
+    header.appendChild(badge);
+    header.appendChild(label);
+  }
+  function section(key, title, icon, open = false) {
+    const details = document.createElement("details");
+    details.className = "cnhr-section";
+    details.dataset.key = key;
+    details.open = expanded.get(key) ?? open;
+    const id = characterId;
+    details.addEventListener("toggle", () => {
+      if (characterId === id)
+        expanded.set(key, details.open);
+      onExpandChange?.();
+    });
+    const summary = document.createElement("summary");
+    sectionHeader(summary, title, icon);
     details.appendChild(summary);
     element.appendChild(details);
+    sections.push(details);
     return details;
+  }
+  function emptySection(title, icon, placeholder) {
+    const block = document.createElement("div");
+    block.className = "cnhr-section cnhr-section-empty";
+    const header = document.createElement("div");
+    header.className = "cnhr-section-header";
+    sectionHeader(header, title, icon);
+    const note = document.createElement("span");
+    note.className = "cnhr-section-placeholder";
+    note.textContent = placeholder;
+    header.appendChild(note);
+    block.appendChild(header);
+    element.appendChild(block);
+  }
+  function expandAllAction() {
+    if (!sections.length)
+      return null;
+    return sections.every((details) => details.open) ? "collapse" : "expand";
+  }
+  function setAllExpanded(open) {
+    for (const details of sections) {
+      details.open = open;
+      if (characterId)
+        expanded.set(details.dataset.key ?? "", open);
+    }
+    onExpandChange?.();
   }
   function prose(text, placeholder) {
     const body = document.createElement("div");
@@ -4451,19 +4484,24 @@ function createProfileView(actions) {
       element.scrollTop = 0;
     }
     element.replaceChildren();
+    sections = [];
     const heading = document.createElement("h2");
     heading.className = "cnhr-character-name";
     heading.textContent = character.name || "Character Profile";
     element.appendChild(heading);
     for (const [key, title, placeholder, icon] of fields) {
-      section(key, title, icon).appendChild(prose(character[key] ?? "", placeholder));
+      const text = character[key] ?? "";
+      if (text.trim())
+        section(key, title, icon).appendChild(prose(text, placeholder));
+      else
+        emptySection(title, icon, placeholder);
     }
     const greetings = character.alternate_greetings ?? [];
-    const alternatives = section("alternate_greetings", "Alternate Greetings", "message");
+    if (!greetings.length)
+      emptySection("Alternate Greetings", "message", "No alternate greetings defined");
+    const alternatives = greetings.length ? section("alternate_greetings", "Alternate Greetings", "message") : null;
     const greetingList = document.createElement("div");
     greetingList.className = "cnhr-greetings";
-    if (!greetings.length)
-      greetingList.appendChild(prose("", "No alternate greetings"));
     greetings.forEach((greeting, index) => {
       const item = document.createElement("details");
       item.className = "cnhr-greeting";
@@ -4496,17 +4534,19 @@ function createProfileView(actions) {
       item.appendChild(body);
       greetingList.appendChild(item);
     });
-    alternatives.appendChild(greetingList);
+    alternatives?.appendChild(greetingList);
+    const ids = [...new Set(character.world_book_ids ?? [])];
+    const embedded = embeddedLorebook(character);
+    if (!ids.length && !embedded) {
+      emptySection("Attached World Books", "book", "No world books defined");
+      onExpandChange?.();
+      return;
+    }
     const books = section("world_book_ids", "Attached World Books", "book");
     const bookList = document.createElement("div");
     bookList.className = "cnhr-books";
     books.appendChild(bookList);
-    const ids = [...new Set(character.world_book_ids ?? [])];
-    const embedded = embeddedLorebook(character);
-    if (!ids.length && !embedded) {
-      bookList.appendChild(prose("", "No world books attached"));
-      return;
-    }
+    onExpandChange?.();
     const status = document.createElement("p");
     status.className = "cnhr-book-status";
     status.setAttribute("role", "status");
@@ -4568,12 +4608,20 @@ function createProfileView(actions) {
       });
     }
   }
-  return { element, render, clear() {
-    ++renderVersion;
-    characterId = null;
-    expanded.clear();
-    element.replaceChildren();
-  } };
+  return {
+    element,
+    render,
+    expandAllAction,
+    setAllExpanded,
+    clear() {
+      ++renderVersion;
+      characterId = null;
+      expanded.clear();
+      sections = [];
+      element.replaceChildren();
+      onExpandChange?.();
+    }
+  };
 }
 
 // src/character-view.ts
@@ -4592,6 +4640,9 @@ var styles = `
 .cnhr-section > summary::-webkit-details-marker,.cnhr-greeting > summary::-webkit-details-marker { display:none; }
 .cnhr-section > summary::after { content:'';width:5px;height:5px;margin-left:auto;margin-right:5px;flex-shrink:0;border-right:1.5px solid var(--lumiverse-text-muted,#85818e);border-bottom:1.5px solid var(--lumiverse-text-muted,#85818e);transform:rotate(-45deg); }
 .cnhr-section[open] > summary::after { transform:rotate(45deg); }
+.cnhr-section-empty > .cnhr-section-header { display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--lumiverse-primary-010,rgba(128,128,128,.16));font-weight:600;color:var(--lumiverse-text-dim,#85818e);opacity:.55;cursor:default; }
+.cnhr-section-empty .cnhr-section-icon { background:var(--lumiverse-primary-005,rgba(128,128,128,.08));color:inherit; }
+.cnhr-section-placeholder { margin-left:auto;font-weight:400;font-style:italic;font-size:.9em;text-align:right; }
 .cnhr-section-icon { display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:6px;background:var(--lumiverse-primary-010,rgba(172,162,201,.1));color:var(--lumiverse-primary,#aca2c9);flex-shrink:0; }
 .cnhr-prose { padding:12px 0 4px;line-height:1.7;overflow-wrap:anywhere;color:var(--lumiverse-text-muted,#b4b1ba); }
 .cnhr-prose > :first-child { margin-top:0; }.cnhr-prose > :last-child { margin-bottom:0; }
@@ -4625,13 +4676,22 @@ function createCharacterView(actions, storageKey) {
   const preview = createPreviewView();
   const profilePanel = document.createElement("div");
   profilePanel.className = "cnhr-profile-panel";
-  const profile = createProfileView(actions);
+  const expandListeners = new Set;
+  const profile = createProfileView(actions, () => notifyExpand());
   profilePanel.appendChild(profile.element);
   const id = `cnhr-${++viewId}`;
   const panels = [preview.element, profilePanel];
   let selected = 0;
   let state = null;
   let profileCharacter = null;
+  function expandAllAction() {
+    return selected === 1 ? profile.expandAllAction() : null;
+  }
+  function notifyExpand() {
+    const action = expandAllAction();
+    for (const listener of expandListeners)
+      listener(action);
+  }
   function renderProfile() {
     if (state?.kind === "character") {
       if (profileCharacter !== state.character) {
@@ -4656,6 +4716,7 @@ function createCharacterView(actions, storageKey) {
     });
     if (selected === 1)
       renderProfile();
+    notifyExpand();
     try {
       if (storageKey && typeof localStorage !== "undefined")
         localStorage.setItem(storageKey, String(index));
@@ -4713,6 +4774,19 @@ function createCharacterView(actions, storageKey) {
         profile.clear();
         profileCharacter = null;
       }
+    },
+    expandAllAction,
+    toggleExpandAll() {
+      const action = expandAllAction();
+      if (action)
+        profile.setAllExpanded(action === "expand");
+    },
+    onExpandAllChange(listener) {
+      expandListeners.add(listener);
+      listener(expandAllAction());
+      return () => {
+        expandListeners.delete(listener);
+      };
     },
     scrollToTop() {
       if (selected === 0)
@@ -5087,6 +5161,8 @@ function clampInt(raw, fallback, min, max) {
 }
 var ICON_EXPAND = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
 var ICON_SCROLL_TOP = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
+var ICON_EXPAND_ALL = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>';
+var ICON_COLLAPSE_ALL = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/></svg>';
 var ICON_CLOSE = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 function iconButton(svg, label) {
   const button = document.createElement("button");
@@ -5097,11 +5173,29 @@ function iconButton(svg, label) {
   button.style.cssText = "display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:none;border-radius:4px;background:transparent;color:inherit;opacity:0.6;cursor:pointer;";
   return button;
 }
-function scrollTopButton(view) {
-  const button = iconButton(ICON_SCROLL_TOP, "Scroll to top");
-  button.style.marginLeft = "auto";
-  button.addEventListener("click", () => view.scrollToTop());
-  return button;
+function viewNavButtons(view) {
+  const group = document.createElement("span");
+  group.style.cssText = "display:inline-flex;align-items:center;gap:6px;margin-left:auto;";
+  const toggle = iconButton(ICON_EXPAND_ALL, "Expand all sections");
+  toggle.addEventListener("click", () => view.toggleExpandAll());
+  const scrollTop = iconButton(ICON_SCROLL_TOP, "Scroll to top");
+  scrollTop.addEventListener("click", () => view.scrollToTop());
+  group.appendChild(toggle);
+  group.appendChild(scrollTop);
+  let shown;
+  view.onExpandAllChange((action) => {
+    if (action === shown)
+      return;
+    shown = action;
+    toggle.style.display = action ? "inline-flex" : "none";
+    if (!action)
+      return;
+    const label = action === "expand" ? "Expand all sections" : "Collapse all sections";
+    toggle.innerHTML = action === "expand" ? ICON_EXPAND_ALL : ICON_COLLAPSE_ALL;
+    toggle.title = label;
+    toggle.setAttribute("aria-label", label);
+  });
+  return group;
 }
 function configureSizeInput(input, label, value, min, max) {
   input.type = "number";
@@ -5246,7 +5340,7 @@ function setup(ctx) {
     toolbar.appendChild(floatButton);
     drawerView = createCharacterView(profileActions, `${EXTENSION_ID}:drawerTab`);
     drawerView.setFontScale(fontState.scale);
-    toolbar.appendChild(scrollTopButton(drawerView));
+    toolbar.appendChild(viewNavButtons(drawerView));
     root.appendChild(drawerView.element);
     root.appendChild(toolbar);
     unsubDrawerView = subscribe(drawerView.render);
@@ -5424,7 +5518,7 @@ function setup(ctx) {
     const stripEnd = document.createElement("span");
     stripEnd.style.cssText = "display:inline-flex;align-items:center;gap:6px;";
     stripEnd.appendChild(floatFontControls.element);
-    stripEnd.appendChild(scrollTopButton(floatView));
+    stripEnd.appendChild(viewNavButtons(floatView));
     sizeStrip.appendChild(stripEnd);
     wroot.appendChild(sizeStrip);
     watchFloatRootHeight(wroot);
