@@ -4724,6 +4724,16 @@ function createCharacterView(actions, storageKey) {
 }
 
 // src/profile-actions.ts
+function newRequestId(ctx) {
+  if (typeof ctx.uuid?.v4 === "function")
+    return ctx.uuid.v4();
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  bytes[6] = bytes[6] & 15 | 64;
+  bytes[8] = bytes[8] & 63 | 128;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 function createProfileActions(context, mode = "main") {
   const ctx = context;
   const Channel = typeof window !== "undefined" ? window.BroadcastChannel : undefined;
@@ -4761,7 +4771,7 @@ function createProfileActions(context, mode = "main") {
   function requestMainWindow(action, id) {
     if (!channel)
       throw new Error("Open this item from the main Lumiverse window.");
-    const requestId = crypto.randomUUID();
+    const requestId = newRequestId(ctx);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(requestId);

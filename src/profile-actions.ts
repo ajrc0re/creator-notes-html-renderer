@@ -3,6 +3,7 @@ import type { ProfileActions } from "./profile-view";
 
 // These supported host APIs were added after this extension's pinned types.
 interface ProfileHostContext extends SpindleFrontendContext {
+  uuid?: { v4(): string; v7(): string };
   worldBooks?: {
     list(): Promise<Array<{ id: string; name: string }> | { data: Array<{ id: string; name: string }> }>;
   };
@@ -11,6 +12,19 @@ interface ProfileHostContext extends SpindleFrontendContext {
       invoke(ref: { kind: "modal"; id: "world_book_editor" | "character_editor" }, params: { id: string }): void | Promise<void>;
     };
   };
+}
+
+// Lumiverse rejects frontend bundles that call the browser's native UUID helper
+// (it is missing on plain HTTP/LAN origins), so use the host's ctx.uuid and
+// fall back to getRandomValues on older hosts that lack it.
+function newRequestId(ctx: ProfileHostContext): string {
+  if (typeof ctx.uuid?.v4 === "function") return ctx.uuid.v4();
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 export function createProfileActions(
@@ -48,7 +62,7 @@ export function createProfileActions(
 
   function requestMainWindow(action: "open" | "open-character", id: string) {
     if (!channel) throw new Error("Open this item from the main Lumiverse window.");
-    const requestId = crypto.randomUUID();
+    const requestId = newRequestId(ctx);
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(requestId);
